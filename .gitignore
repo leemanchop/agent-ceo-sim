@@ -1,0 +1,98 @@
+# ── Frontend (Next.js) ───────────────────────────────────────────────
+web/node_modules/
+web/.next/
+web/out/
+web/build/
+web/.vercel/
+web/coverage/
+web/*.tsbuildinfo
+
+# ── Frontend env (per-developer; never commit) ───────────────────────
+web/.env
+web/.env.*
+!web/.env.local.example
+!web/.env.example
+
+# ── Backend (Python / Modal) ─────────────────────────────────────────
+backend/__pycache__/
+backend/**/__pycache__/
+backend/*.pyc
+backend/.pytest_cache/
+backend/.mypy_cache/
+backend/.ruff_cache/
+backend/venv/
+backend/.venv/
+backend/env/
+backend/dist/
+backend/build/
+backend/*.egg-info/
+backend/.modal/
+
+# ── Backend local SQLite (Modal serve falls back to /tmp; if it ever ──
+#    writes locally we don't want it tracked) ────────────────────────
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+backend/runs.db*
+backend/usage.db*
+
+# ── Secrets / runtime config ─────────────────────────────────────────
+.env
+.env.*
+!.env.example
+**/anthropic-api-key*
+**/google-oauth-secret*
+*.key
+*.pem
+
+# ── OS cruft ─────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ── Editor / IDE ─────────────────────────────────────────────────────
+.vscode/
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+
+# ── Claude Code / Cursor / agent telemetry ───────────────────────────
+.claude/
+.cursor/
+.aider*
+*.aider*
+
+# ── Logs ─────────────────────────────────────────────────────────────
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-debug.log*
+
+# ── Test outputs ─────────────────────────────────────────────────────
+/coverage/
+*.lcov
+
+# ── Misc ─────────────────────────────────────────────────────────────
+*.tmp
+*.bak
+*.orig
+*~
+
+# ── Files we explicitly DO want in the repo ──────────────────────────
+!web/public/sfx/README.md
+!.github/
+!scripts/

@@ -1,0 +1,10 @@
+# Modal-image dependencies. Mirror these in modal_app.py's image.pip_install(...)
+# whenever this file changes — Modal does NOT read requirements.txt
+# automatically. This file is here for IDE / type-check / local-virtualenv use.
+modal>=0.64.0
+anthropic>=0.40.0
+fastapi>=0.115.0
+uvicorn>=0.30.0
+pyyaml>=6.0
+httpx>=0.27.0
+pydantic>=2.8

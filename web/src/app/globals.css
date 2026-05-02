@@ -1,0 +1,310 @@
+@import "tailwindcss";
+
+@theme {
+  --color-paper: #15130f;
+  --color-paper-2: #1f1c17;
+  --color-ink: #f1ede4;
+  --color-ink-2: #cfc8b8;
+  --color-soft: #7a7363;
+  --color-alarm: #ff5a47;
+  --color-alarm-soft: #3a1410;
+  --color-x-bg: #000000;
+  --color-x-text: #e7e9ea;
+  --color-x-muted: #71767b;
+  --color-x-blue: #1d9bf0;
+  --color-x-rule: #2f3336;
+  --color-x-gold: #f5b900;
+}
+
+:root {
+  --paper: #15130f;
+  --paper-2: #1f1c17;
+  --ink: #f1ede4;
+  --ink-2: #cfc8b8;
+  --soft: #7a7363;
+  --alarm: #ff5a47;
+  --alarm-soft: #3a1410;
+  --x-bg: #000;
+  --x-text: #e7e9ea;
+  --x-muted: #71767b;
+  --x-blue: #1d9bf0;
+  --x-rule: #2f3336;
+  --x-gold: #f5b900;
+
+  --font-body: var(--font-special-elite), 'Courier Prime', 'Courier New', monospace;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace;
+  --font-x: 'Helvetica Neue', 'Helvetica', 'Segoe UI', system-ui, sans-serif;
+
+  color-scheme: dark;
+}
+
+@layer base {
+  html, body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-feature-settings: "tnum" 1;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Tailwind v4 preflight resets cursor — restore pointer on interactive
+     elements so the UI reflects clickability without per-element styling. */
+  button:not([disabled]),
+  [role="button"]:not([aria-disabled="true"]),
+  a[href],
+  summary,
+  label[for],
+  select:not([disabled]) {
+    cursor: pointer;
+  }
+  button[disabled],
+  [role="button"][aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+
+  ::selection {
+    background: rgba(255, 90, 71, 0.35);
+    color: var(--ink);
+  }
+
+  /* tabular figures for numbers everywhere */
+  .font-mono {
+    font-feature-settings: "tnum" 1;
+    font-family: var(--font-mono);
+  }
+
+  /* thin scrollbars */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-thumb { background: #2a261f; border-radius: 0; }
+  ::-webkit-scrollbar-track { background: transparent; }
+}
+
+@layer components {
+  /* core pill */
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border: 1.4px solid var(--ink);
+    border-radius: 999px;
+    padding: 1px 8px;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    line-height: 1.4;
+    color: var(--ink);
+    background: transparent;
+  }
+  .pill.solid {
+    background: var(--ink);
+    color: var(--paper);
+  }
+  .pill.alarm {
+    border-color: var(--alarm);
+    color: var(--alarm);
+  }
+  .pill.alarm.solid {
+    background: var(--alarm);
+    color: var(--paper);
+  }
+
+  .stamp {
+    display: inline-flex;
+    align-items: center;
+    border: 2px solid var(--alarm);
+    color: var(--alarm);
+    font-family: var(--font-mono);
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    padding: 2px 6px;
+    background: transparent;
+  }
+
+  .tag {
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    color: var(--soft);
+  }
+
+  /* hand underline (for landing) */
+  .hand-underline {
+    position: relative;
+    white-space: nowrap;
+  }
+  .hand-underline::after {
+    content: "";
+    position: absolute;
+    left: -2px;
+    right: -2px;
+    bottom: -3px;
+    height: 5px;
+    background: var(--alarm);
+    border-radius: 50%;
+    transform: skew(-6deg) rotate(-1.4deg) scaleY(0.4);
+    opacity: 0.85;
+    z-index: -1;
+  }
+
+  .annotation {
+    font-family: var(--font-body);
+    color: var(--alarm);
+    font-size: 13px;
+    transform: rotate(-6deg);
+    display: inline-block;
+  }
+
+  .brutalist-input {
+    width: 100%;
+    background: var(--paper);
+    border: 1.4px solid var(--ink);
+    color: var(--ink);
+    padding: 8px 10px;
+    font-family: var(--font-body);
+    font-size: 14px;
+    border-radius: 0;
+    outline: none;
+  }
+  .brutalist-input:focus {
+    border-color: var(--alarm);
+  }
+  .brutalist-input::placeholder {
+    color: var(--soft);
+  }
+
+  .brutalist-btn {
+    border: 1.4px solid var(--ink);
+    background: var(--ink);
+    color: var(--paper);
+    font-family: var(--font-mono);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 12px 18px;
+    cursor: pointer;
+    border-radius: 0;
+  }
+  .brutalist-btn:hover {
+    background: var(--alarm);
+    border-color: var(--alarm);
+    color: var(--paper);
+  }
+  .brutalist-btn[disabled] {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+@layer utilities {
+  .font-body { font-family: var(--font-body); }
+  .font-x    { font-family: var(--font-x); }
+
+  .bg-paper  { background: var(--paper); }
+  .bg-paper2 { background: var(--paper-2); }
+  .text-ink   { color: var(--ink); }
+  .text-ink2  { color: var(--ink-2); }
+  .text-soft  { color: var(--soft); }
+  .text-alarm { color: var(--alarm); }
+  .border-ink { border-color: var(--ink); }
+  .border-alarm { border-color: var(--alarm); }
+
+  .animate-feed-in {
+    animation: feed-in 280ms ease-out both;
+  }
+  .animate-event-in {
+    animation: event-in 200ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+  .animate-flash-pos {
+    animation: flash-pos var(--flash-ms, 600ms) ease-out;
+  }
+  .animate-flash-neg {
+    animation: flash-neg var(--flash-ms, 600ms) ease-out;
+  }
+  .animate-pulse-soft {
+    animation: pulse-soft 3.6s ease-in-out infinite;
+  }
+  .animate-blink {
+    animation: blink 1s step-end infinite;
+  }
+  .ring-timer {
+    animation: ring-tick var(--ring-duration, 8s) linear forwards;
+  }
+  .animate-toast-in {
+    animation: toast-in 250ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+  .animate-toast-out {
+    animation: toast-out 250ms cubic-bezier(0.4, 0, 1, 1) both;
+  }
+  .animate-modal-in {
+    animation: modal-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+  .animate-notif-in {
+    animation: notif-in 250ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+  .animate-notif-out {
+    animation: notif-out 200ms cubic-bezier(0.4, 0, 1, 1) both;
+  }
+}
+
+@keyframes feed-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes event-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes flash-pos {
+  0%   { color: var(--ink); }
+  100% { color: var(--ink); }
+}
+
+@keyframes flash-neg {
+  0%   { color: var(--alarm); }
+  100% { color: var(--ink); }
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 0.95; }
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+@keyframes ring-tick {
+  from { stroke-dashoffset: 0; }
+  to   { stroke-dashoffset: 226; }
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(24px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes toast-out {
+  from { opacity: 1; transform: translateX(0); }
+  to   { opacity: 0; transform: translateX(24px); }
+}
+
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes notif-in {
+  from { opacity: 0; transform: translateX(28px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes notif-out {
+  from { opacity: 1; transform: translateX(0); }
+  to   { opacity: 0; transform: translateX(28px); }
+}

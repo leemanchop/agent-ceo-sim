@@ -1,0 +1,7 @@
+{
+  "name": "agent-ceo-sim",
+  "private": true,
+  "scripts": {
+    "validate:corpus": "node scripts/validate-corpus.mjs"
+  }
+}
