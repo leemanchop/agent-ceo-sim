@@ -301,6 +301,10 @@ def install_routes(api: Any) -> None:  # api: FastAPI
 
                     # Stat-based endgame check before generating another turn.
                     if _endgame_triggered_by_stats(state):
+                        print(
+                            f"[endgame] route=stats turn={state.turn} "
+                            f"run={state.run_id} stats={state.stats.snapshot()}"
+                        )
                         async for chunk in _emit_endgame(state, sse):
                             yield chunk
                         return
@@ -337,7 +341,18 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                         # Avoids runaway retry loops if the LLM is wedged.
                         fails = getattr(state, "_oracle_fail_count", 0) + 1
                         state._oracle_fail_count = fails  # type: ignore[attr-defined]
-                        if fails >= 3:
+                        # Even on persistent LLM failure, never force an endgame
+                        # before the user has seen 3 decisions resolve. Let
+                        # them sit in error-retry hell instead — they can
+                        # always close the tab. Forced-endgame on turn 1 is
+                        # worse UX than a clear "agent disconnected" message
+                        # that the user can give up on themselves.
+                        MIN_DECISIONS = 3
+                        if fails >= 3 and state.turn >= MIN_DECISIONS:
+                            print(
+                                f"[endgame] route=llm_3_strikes turn={state.turn} "
+                                f"run={state.run_id}"
+                            )
                             yield _system_error_sse(
                                 "oracle disconnected. forcing endgame.",
                             )
@@ -631,6 +646,10 @@ def install_routes(api: Any) -> None:  # api: FastAPI
 
                     # ---- 7) Stat-based endgame check after consequences ----
                     if _endgame_triggered_by_stats(state):
+                        print(
+                            f"[endgame] route=stats_post turn={state.turn} "
+                            f"run={state.run_id} stats={state.stats.snapshot()}"
+                        )
                         async for chunk in _emit_endgame(state, sse):
                             yield chunk
                         return
@@ -638,6 +657,10 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                     await asyncio.sleep(_gap_for_speed(state.speed))
 
                 # ---- Out-of-turns endgame (no stat trigger fired) ----
+                print(
+                    f"[endgame] route=max_turns turn={state.turn} "
+                    f"run={state.run_id} max_turns={state.max_turns()}"
+                )
                 async for chunk in _emit_endgame(state, sse):
                     yield chunk
             except asyncio.CancelledError:
