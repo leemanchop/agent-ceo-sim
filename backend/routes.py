@@ -861,7 +861,20 @@ def _chunk_for_stream(text: str):
 
 
 def _endgame_triggered_by_stats(state) -> bool:
-    """Hard endgame triggers — these end the run regardless of turn count."""
+    """Hard endgame triggers. Gated by a minimum-turn threshold so a run can
+    never terminate before the user has seen at least 3 decisions resolve —
+    runs that flame out on turn 1 are unsatisfying as drama and prevent the
+    user from trying out the prediction loop. The Oracle's stat deltas can
+    push fbi_awareness or fraud_score past the kill thresholds quickly when
+    the early arc is high-severity (Wells notice, demo-fraud reveal, etc.).
+    """
+    # Minimum decisions before any endgame can fire. micro mode is 5 turns
+    # total so we cap at 3; longer modes can use the same floor without
+    # noticeably constraining the arc.
+    MIN_DECISIONS_BEFORE_ENDGAME = 3
+    if state.turn < MIN_DECISIONS_BEFORE_ENDGAME:
+        return False
+
     s = state.stats
     if s.fbi_awareness >= 95 and s.fraud_score >= 85:
         return True
