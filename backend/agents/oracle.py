@@ -103,12 +103,11 @@ PER TURN, YOUR JOB IS:
    headcount (int), reputation (-100..100), fbi_awareness (0..100),
    fraud_score (0..100), day (int — increments by 7-21).
 
-OUTPUT FORMAT — STRICT JSON ONLY. NO PROSE BEFORE OR AFTER.
-NO MARKDOWN CODE FENCES. NO COMMENTS. NO TRAILING COMMAS.
-Inside string values: use \\n for newlines, \\" for quotes. NEVER include
-a literal newline inside a string. NEVER include // or /* */ comments.
-NEVER include extra fields beyond the schema below — schemas with extra
-keys break the parser. Begin your output with {{ and end with }}.
+OUTPUT — call the tool `emit_oracle_turn` exactly once. Its input_schema
+defines the shape; pass the turn's data as the tool input. Do NOT produce
+any free-form text. The tool call IS the response.
+
+For reference, the tool's input has this shape:
 
 {{
   "event_card": {{
@@ -150,6 +149,129 @@ Use snake_case seed_ids per game/chaining.md naming patterns
 """
 
 
+# ───────────────────────────────────────────────────────────────────────────
+# Tool-use schema. We force the Oracle to call this single tool, which means
+# the API itself validates the output shape and we never see free-form text.
+# This eliminates the JSON-parsing failure mode entirely — "valid JSON" is
+# now a hard guarantee from the Anthropic API, not a hope from a regex.
+# ───────────────────────────────────────────────────────────────────────────
+ORACLE_TOOL: Dict[str, Any] = {
+    "name": "emit_oracle_turn",
+    "description": (
+        "Emit one Oracle turn: the main event card, NPC reactions, atmospheric "
+        "beats, media artifacts, stat deltas, and foreshadow tracker updates. "
+        "Call this exactly once per turn."
+    ),
+    "input_schema": {
+        "type": "object",
+        "additionalProperties": True,
+        "required": [
+            "event_card",
+            "reactions",
+            "stats_deltas",
+            "foreshadow_updates",
+        ],
+        "properties": {
+            "event_card": {
+                "type": "object",
+                "required": ["id", "category", "severity", "title", "body", "choices"],
+                "additionalProperties": True,
+                "properties": {
+                    "id": {"type": "string"},
+                    "category": {"type": "string"},
+                    "severity": {"type": "string", "enum": ["S", "M", "L", "XL"]},
+                    "title": {"type": "string"},
+                    "body": {"type": "string"},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                    "choices": {
+                        "type": "array",
+                        "minItems": 2,
+                        "maxItems": 4,
+                        "items": {
+                            "type": "object",
+                            "required": ["id", "label", "tone"],
+                            "additionalProperties": True,
+                            "properties": {
+                                "id": {"type": "string"},
+                                "label": {"type": "string"},
+                                "tone": {"type": "string"},
+                            },
+                        },
+                    },
+                },
+            },
+            "atmospheric": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": True,
+                    "properties": {
+                        "kind": {"type": "string"},
+                        "headline": {"type": "string"},
+                        "stat_deltas": {"type": "object"},
+                    },
+                },
+            },
+            "reactions": {
+                "type": "array",
+                "minItems": 3,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": True,
+                    "required": ["source", "body"],
+                    "properties": {
+                        "source": {"type": "string"},
+                        "handle": {"type": "string"},
+                        "name": {"type": "string"},
+                        "publication": {"type": "string"},
+                        "channel": {"type": "string"},
+                        "body": {"type": "string"},
+                    },
+                },
+            },
+            "artifacts": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": True,
+                    "required": ["kind", "body"],
+                    "properties": {
+                        "kind": {"type": "string"},
+                        "body": {"type": "string"},
+                    },
+                },
+            },
+            "stats_deltas": {
+                "type": "object",
+                "additionalProperties": True,
+                "properties": {
+                    "valuation": {"type": "integer"},
+                    "cash": {"type": "integer"},
+                    "revenue": {"type": "integer"},
+                    "burn": {"type": "integer"},
+                    "headcount": {"type": "integer"},
+                    "reputation": {"type": "integer"},
+                    "fbi_awareness": {"type": "integer"},
+                    "fraud_score": {"type": "integer"},
+                    "day": {"type": "integer"},
+                },
+            },
+            "foreshadow_updates": {
+                "type": "object",
+                "additionalProperties": True,
+                "properties": {
+                    "plant": {"type": "array", "items": {"type": "string"}},
+                    "paid_off": {"type": "array", "items": {"type": "string"}},
+                    "paid_lite": {"type": "array", "items": {"type": "string"}},
+                    "rerolled": {"type": "array", "items": {"type": "string"}},
+                },
+            },
+            "market_updates": {"type": "array"},
+        },
+    },
+}
+
+
 def _corpus_block() -> Dict[str, Any]:
     """The cached world-corpus block. ~50k tokens, cached ephemerally so per-turn
     cost is dominated by completion tokens, not the corpus."""
@@ -176,12 +298,14 @@ def _last_turns_summary(state: RunState, k: int = 3) -> str:
     recent = state.turns[-k:]
     out = []
     for t in recent:
+        tweet = (t.artifact_tweet or "")[:140]
+        justification = t.justification or ""
         out.append(
             f"Turn {t.turn} | {t.category}/{t.severity} | "
             f"{t.event_title}\n  agent_picked={t.agent_choice_id}"
             f"  user_predicted={t.user_prediction}  user_forced={t.user_force_choice}"
-            f"\n  justification: {t.justification}"
-            f"\n  tweet: {t.artifact_tweet[:140]}"
+            f"\n  justification: {justification}"
+            f"\n  tweet: {tweet}"
         )
     return "\n".join(out)
 
@@ -214,37 +338,51 @@ stats: {json.dumps(state.stats.snapshot())}
 === LAST CEO COMMIT (if any — drives this turn's reactions) ===
 {json.dumps(last_ceo_commit, indent=2) if last_ceo_commit else "(none — first turn)"}
 
-Generate this turn's output as STRICT JSON per the schema in your system
-prompt. No prose, no commentary, no code fence. Just the JSON object.
+Emit this turn by calling the `emit_oracle_turn` tool exactly once.
+The tool's input_schema enforces the shape — your tool input IS the turn.
+Do not write any prose; the tool call is the entire response.
 """
 
-    def _call(model: str) -> str:
+    def _call_tool(model: str) -> Optional[Dict[str, Any]]:
         msg = usage_tracker.tracked_messages_create(
             run_id=state.run_id,
             agent="oracle",
             model=model,
-            # Oracle output is verbose JSON — event card + 3-5 reactions + atmospheric
-            # + stats deltas + foreshadow updates. 4500 covers worst-case Haiku verbosity.
+            # Tool inputs are still tokens — event card + 3-5 reactions +
+            # atmospheric + deltas + foreshadow. 4500 covers worst case.
             max_tokens=4500,
             system=_build_system_blocks(),
             messages=[{"role": "user", "content": user_prompt}],
+            tools=[ORACLE_TOOL],
+            tool_choice={"type": "tool", "name": "emit_oracle_turn"},
         )
-        return "".join(
-            b.text for b in msg.content if getattr(b, "type", None) == "text"
-        )
+        for block in msg.content:
+            if getattr(block, "type", None) == "tool_use" and \
+                    getattr(block, "name", None) == "emit_oracle_turn":
+                tool_input = getattr(block, "input", None)
+                if isinstance(tool_input, dict):
+                    return tool_input
+        return None
 
-    # Single-shot Haiku. If parse fails → immediate fallback. Speed > quality.
-    # Run keeps moving even when the LLM misbehaves; the user gets one
-    # generic turn instead of a 30-second wait.
-    text = _call(MODEL_ORACLE)
-    parsed = _extract_json(text)
+    # Single-shot Haiku via forced tool_use. The API guarantees the tool
+    # input matches our schema — no JSON parsing, no truncation repair.
+    # If the call fails outright (network / 5xx / model refusal) we fall
+    # back to a template-aware deck instead of stalling the run.
+    try:
+        parsed = _call_tool(MODEL_ORACLE)
+    except Exception as exc:  # noqa: BLE001 — we want broad recovery
+        print(
+            f"[oracle] turn={state.turn} run={state.run_id} "
+            f"tool_use call raised {type(exc).__name__}: {exc} — using fallback"
+        )
+        return _fallback_event(state)
+
     if isinstance(parsed, dict) and parsed.get("event_card"):
         return parsed
     print(
         f"[oracle] turn={state.turn} run={state.run_id} "
-        f"parse failed (len={len(text)}) — using fallback"
+        f"tool_use returned no usable input — using fallback"
     )
-    print(f"[oracle] tail: {text[-200:]!r}")
     return _fallback_event(state)
 
 
@@ -416,6 +554,15 @@ def _strip_fence(text: str) -> str:
 
 
 def _fallback_event(state: RunState) -> Dict[str, Any]:
+    """Pick a template-aware fallback when the Oracle's LLM output is
+    unparseable. Per-template fallback decks live in _TEMPLATE_FALLBACKS;
+    we rotate through them by turn number for variety. Generic fallback
+    is used when no template-specific deck matches.
+
+    Each entry in the deck is a fully-formed Oracle response (event_card +
+    reactions + stats_deltas), written to land like a real corpus event so
+    the user can't tell the LLM whiffed.
+    """
     company = "the company"
     if state.bible:
         bible_company = state.bible.get("company") or {}
@@ -426,9 +573,283 @@ def _fallback_event(state: RunState) -> Dict[str, Any]:
             or state.bible.get("name")
             or "the company"
         )
+
+    template_id = (state.template_id or "").lower().strip() or None
+    deck = _TEMPLATE_FALLBACKS.get(template_id) or _GENERIC_FALLBACKS
+
+    # Rotate through the deck by turn so the same fallback doesn't fire
+    # twice in a row when Haiku has a bad-luck streak.
+    fallback_idx = (state.turn - 1) % len(deck)
+    base = deck[fallback_idx](company, state)
+
+    # Stamp it with a deterministic but unique id and standard wrapper.
+    return {
+        "event_card": base["event_card"] | {
+            "id": f"EVT-FALLBACK-{template_id or 'gen'}-{state.turn:03d}".upper(),
+        },
+        "atmospheric": base.get("atmospheric", []),
+        "reactions": base.get("reactions", []),
+        "artifacts": base.get("artifacts", []),
+        "stats_deltas": base.get("stats_deltas", {"day": 14}),
+        "foreshadow_updates": base.get(
+            "foreshadow_updates",
+            {"plant": [], "paid_off": [], "paid_lite": [], "rerolled": []},
+        ),
+        "market_updates": base.get("market_updates", []),
+    }
+
+
+# ── Per-template fallback decks ─────────────────────────────────────────
+#
+# Each function takes (company_name, state) and returns a partial Oracle
+# response. The wrapper above fills in id and applies defaults. Write these
+# in voice — they should land like genuine corpus events.
+
+def _delve_fb_deepdelver(company: str, state: RunState) -> Dict[str, Any]:
     return {
         "event_card": {
-            "id": f"EVT-FALLBACK-{state.turn:03d}",
+            "category": "PRESS",
+            "severity": "L",
+            "title": "DeepDelver posts Part II",
+            "body": (
+                f"The anonymous Substacker who broke the {company} story posts "
+                "a 7,200-word follow-up: 493 of 494 SOC 2 reports are "
+                "99.8% identical, same paragraphs, same auditor signature, "
+                "different logos. The Bookface thread is locked within an hour."
+            ),
+            "tags": ["press_exposure", "soc2_misrepresented_seed", "fraud_lite", "atmospheric"],
+            "choices": [
+                {"id": "A", "label": "Quote-tweet with 'we welcome scrutiny'", "tone": "unhinged"},
+                {"id": "B", "label": "Issue a 14-page legal-vetted statement", "tone": "midwit"},
+                {"id": "C", "label": "Ghost the post entirely", "tone": "rare-cucked"},
+            ],
+        },
+        "reactions": [
+            {"source": "twitter", "handle": "@deepdelver", "name": "DeepDelver",
+             "body": "part III drops thursday. it's about the customer list."},
+            {"source": "techcrunch", "publication": "TechCrunch",
+             "body": f"DeepDelver follow-up alleges 99.8% report similarity at {company}; YC declines comment"},
+            {"source": "slack", "channel": "#exec", "name": "anon",
+             "body": "we cannot say 'AI generated it' as a defense. we said it was AI as a feature."},
+        ],
+        "stats_deltas": {"reputation": -10, "fraud_score": 8, "fbi_awareness": 4, "day": 7},
+        "foreshadow_updates": {
+            "plant": ["deepdelver_loaded_seed", "press_exposure_seed"],
+            "paid_off": [], "paid_lite": [], "rerolled": [],
+        },
+    }
+
+def _delve_fb_garry_tan(company: str, state: RunState) -> Dict[str, Any]:
+    return {
+        "event_card": {
+            "category": "FOUNDER",
+            "severity": "M",
+            "title": "Garry Tan unfollows on X",
+            "body": (
+                f"Garry Tan unfollows {company}'s founder on X. The unfollow is "
+                "screenshotted within 90 seconds. The screenshot is now the "
+                "second-most-quoted post in the thread under the YC W24 launch "
+                "video. The first is a comment that says 'is this still on YC's site lol'."
+            ),
+            "tags": ["founder_behavior", "yc_alumni_chorus_seed", "real_name", "atmospheric"],
+            "choices": [
+                {"id": "A", "label": "Post a 'still grateful to YC' carousel", "tone": "unhinged"},
+                {"id": "B", "label": "DM Garry to ask 'what's up'", "tone": "midwit"},
+                {"id": "C", "label": "Lock the X account", "tone": "rare-cucked"},
+            ],
+        },
+        "reactions": [
+            {"source": "twitter", "handle": "@garrytan", "name": "Garry Tan",
+             "body": "no comment beyond what's already public"},
+            {"source": "twitter", "handle": "@yc_w23_anon", "name": "@yc_w23_anon",
+             "body": "the unfollow is the most expensive YC bookface badge ever issued"},
+            {"source": "discord", "handle": "yc-w24-private", "name": "[redacted]",
+             "body": "we have a meeting today. it is not a normal meeting."},
+        ],
+        "stats_deltas": {"reputation": -8, "fraud_score": 4, "day": 5},
+        "foreshadow_updates": {
+            "plant": ["yc_distancing_seed"],
+            "paid_off": [], "paid_lite": [], "rerolled": [],
+        },
+    }
+
+def _delve_fb_cluely_quote(company: str, state: RunState) -> Dict[str, Any]:
+    return {
+        "event_card": {
+            "category": "CUSTOMERS",
+            "severity": "M",
+            "title": "Cluely's CEO quote-dunks",
+            "body": (
+                f"Cluely's CEO posts a 14-tweet thread that begins 'we were "
+                f"a {company} customer for 11 days' and ends with a screenshot "
+                "of the SOC 2 report's title page misspelling 'Clueley'. "
+                "He pins it. The thread does 8.4M impressions before lunch."
+            ),
+            "tags": ["customer", "press_exposure", "real_name", "cluely_was_a_delve_customer_seed"],
+            "choices": [
+                {"id": "A", "label": "Counter-thread with 'his typo on his typo'", "tone": "unhinged"},
+                {"id": "B", "label": "Refund and NDA", "tone": "midwit"},
+                {"id": "C", "label": "No response — let it cool", "tone": "rare-cucked"},
+            ],
+        },
+        "reactions": [
+            {"source": "twitter", "handle": "@roy_lee", "name": "Roy Lee",
+             "body": "we cancelled within the hour. ask me anything 🧵"},
+            {"source": "twitter", "handle": "@startup_dunk", "name": "Startup Dunk",
+             "body": "two YC W24 companies arguing over which one is more fake. that's the whole game now."},
+            {"source": "slack", "channel": "#leadership", "name": "anon",
+             "body": "legal says we cannot post about Cluely without it becoming exhibit something."},
+        ],
+        "stats_deltas": {"reputation": -12, "revenue": -50_000, "fraud_score": 6, "day": 4},
+        "foreshadow_updates": {
+            "plant": ["cluely_feud_loaded_seed"],
+            "paid_off": ["customer_trust_brittle_seed"],
+            "paid_lite": [], "rerolled": [],
+        },
+    }
+
+def _delve_fb_insight_check(company: str, state: RunState) -> Dict[str, Any]:
+    return {
+        "event_card": {
+            "category": "FUNDRAISING",
+            "severity": "L",
+            "title": "Insight Partners requests a 'check-in'",
+            "body": (
+                "An Insight Partners associate emails the founder at 11pm "
+                "asking for a 'quick sync to align on narrative' tomorrow at 8am. "
+                "The calendar invite has six attendees — three of whom are not "
+                "from Insight. Two are former federal prosecutors. The third "
+                "works at the firm's PR agency."
+            ),
+            "tags": ["fundraising", "regulator_aware", "atmospheric", "real_name"],
+            "choices": [
+                {"id": "A", "label": "Show up. Wing it.", "tone": "unhinged"},
+                {"id": "B", "label": "Bring counsel. Slow it down.", "tone": "midwit"},
+                {"id": "C", "label": "Reschedule to give legal 48 hours", "tone": "rare-cucked"},
+            ],
+        },
+        "reactions": [
+            {"source": "slack", "channel": "#exec", "name": "anon",
+             "body": "they are bringing prosecutors to a 'check-in.' that is not what a check-in is."},
+            {"source": "twitter", "handle": "@anonvc", "name": "AnonVC",
+             "body": "if your lead VC is bringing white-collar counsel to office hours, you are no longer 'in office hours'"},
+        ],
+        "stats_deltas": {"valuation": -40_000_000, "fraud_score": 6, "fbi_awareness": 6, "day": 3},
+        "foreshadow_updates": {
+            "plant": ["insight_aware_seed", "down_round_loaded_seed"],
+            "paid_off": [], "paid_lite": [], "rerolled": [],
+        },
+    }
+
+def _delve_fb_forbes_call(company: str, state: RunState) -> Dict[str, Any]:
+    return {
+        "event_card": {
+            "category": "PRESS",
+            "severity": "M",
+            "title": "Forbes 30u30 fact-checker calls",
+            "body": (
+                f"A Forbes 30 Under 30 fact-checker calls about {company}'s "
+                "founders' 2026 listing. She has 'a few quick questions' about "
+                "the customer count, the funding total, and 'a Substack post you may "
+                "have seen.' She has been on the phone with two ex-employees today."
+            ),
+            "tags": ["press_exposure", "press", "forbes_30u30_loaded_seed", "real_name"],
+            "choices": [
+                {"id": "A", "label": "Tell her '$32M, 1500+ customers' on the record", "tone": "unhinged"},
+                {"id": "B", "label": "Have PR call back, give vetted numbers", "tone": "midwit"},
+                {"id": "C", "label": "Decline the interview", "tone": "rare-cucked"},
+            ],
+        },
+        "reactions": [
+            {"source": "forbes", "publication": "Forbes",
+             "body": f"Forbes 30 Under 30 reviews 2026 list following anonymous-tip-line claims about {company}"},
+            {"source": "twitter", "handle": "@litcapital", "name": "litquidity",
+             "body": "30u30 → 5y federal pipeline running on schedule"},
+            {"source": "slack", "channel": "#leadership", "name": "anon",
+             "body": "she has been talking to ex-employees. plural. since when do we have plural ex-employees."},
+        ],
+        "stats_deltas": {"reputation": -6, "fraud_score": 4, "day": 5},
+        "foreshadow_updates": {
+            "plant": ["forbes_investigation_seed"],
+            "paid_off": [], "paid_lite": [], "rerolled": [],
+        },
+    }
+
+def _delve_fb_anthropic_dropout(company: str, state: RunState) -> Dict[str, Any]:
+    return {
+        "event_card": {
+            "category": "CUSTOMERS",
+            "severity": "L",
+            "title": "Anthropic quietly drops the contract",
+            "body": (
+                f"Anthropic, listed prominently on {company}'s customer page, "
+                "sends a polite email at 3:47pm: 'as discussed, we'll be ending "
+                "the engagement this quarter — please remove our logo from "
+                "marketing materials at your earliest convenience.' The logo "
+                "is removed from the homepage at 4:11pm. The Wayback Machine "
+                "has a snapshot from 4:09pm."
+            ),
+            "tags": ["customer", "press_exposure", "wayback_machine_seed", "real_name"],
+            "choices": [
+                {"id": "A", "label": "Tweet: 'mutual decision, exciting next chapter'", "tone": "unhinged"},
+                {"id": "B", "label": "Update the site, hope no one notices", "tone": "midwit"},
+                {"id": "C", "label": "Disclose to investors before they read about it", "tone": "rare-cucked"},
+            ],
+        },
+        "reactions": [
+            {"source": "twitter", "handle": "@SoftwareEng_Memes", "name": "Software Engineering Memes",
+             "body": f"the speed at which the Anthropic logo was removed from {company}.co is itself the news"},
+            {"source": "techcrunch", "publication": "The Information",
+             "body": f"Anthropic ends {company} engagement; sources cite 'compliance posture mismatch'"},
+            {"source": "slack", "channel": "#exec", "name": "anon",
+             "body": "Brex is asking why Anthropic left. Notion is asking why Anthropic left. Lovable is not asking."},
+        ],
+        "stats_deltas": {"revenue": -120_000, "reputation": -14, "valuation": -20_000_000, "day": 6},
+        "foreshadow_updates": {
+            "plant": ["customer_logo_purge_seed"],
+            "paid_off": ["customer_trust_brittle_seed"],
+            "paid_lite": [], "rerolled": [],
+        },
+    }
+
+def _delve_fb_quiet(company: str, state: RunState) -> Dict[str, Any]:
+    return {
+        "event_card": {
+            "category": "FOUNDER",
+            "severity": "S",
+            "title": "Bookface goes quiet",
+            "body": (
+                f"For 36 hours nobody posts in the W24 Bookface thread about {company}. "
+                "This is not normal. Bookface is never quiet. Three founders DM "
+                "the founder asking 'is everything ok?' One DM is from someone "
+                "currently rotating audit firms."
+            ),
+            "tags": ["founder_behavior", "vibes_off", "atmospheric", "yc_alumni_chorus_seed"],
+            "choices": [
+                {"id": "A", "label": "Post a normal-sounding update to break the silence", "tone": "unhinged"},
+                {"id": "B", "label": "Reply individually with 'doing great, building'", "tone": "midwit"},
+                {"id": "C", "label": "Stay off Bookface entirely", "tone": "rare-cucked"},
+            ],
+        },
+        "reactions": [
+            {"source": "twitter", "handle": "@founder_brain", "name": "Founder Brain",
+             "body": "if your batch's bookface is quiet about you, you are the topic of every other DM"},
+            {"source": "discord", "handle": "yc-w24-back-channel", "name": "[redacted]",
+             "body": "everyone has the same screenshots. nobody wants to be the one who posts them."},
+        ],
+        "stats_deltas": {"reputation": -3, "morale": -3, "day": 2},
+        "foreshadow_updates": {
+            "plant": ["bookface_silence_seed"],
+            "paid_off": [], "paid_lite": [], "rerolled": [],
+        },
+    }
+
+
+# ── Generic fallbacks for non-template runs ─────────────────────────────
+
+def _gen_fb_quiet(company: str, state: RunState) -> Dict[str, Any]:
+    return {
+        "event_card": {
             "category": "PRESS",
             "severity": "S",
             "title": "Quiet day on the timeline",
@@ -440,10 +861,67 @@ def _fallback_event(state: RunState) -> Dict[str, Any]:
                 {"id": "C", "label": "Ship a feature", "tone": "based"},
             ],
         },
-        "atmospheric": [],
-        "reactions": [],
-        "artifacts": [],
-        "stats_deltas": {"day": 14},
-        "foreshadow_updates": {"plant": [], "paid_off": [], "paid_lite": [], "rerolled": []},
-        "market_updates": [],
+        "stats_deltas": {"day": 7},
     }
+
+def _gen_fb_glassdoor(company: str, state: RunState) -> Dict[str, Any]:
+    return {
+        "event_card": {
+            "category": "HIRING",
+            "severity": "S",
+            "title": "Anonymous Glassdoor review",
+            "body": (
+                f"A 1-star {company} review hits Glassdoor at 11:47pm. "
+                "Title: 'Pros: kombucha. Cons: everything else.' The review "
+                "is unusually specific about a Q3 all-hands."
+            ),
+            "tags": ["hr_problem", "glassdoor", "atmospheric"],
+            "choices": [
+                {"id": "A", "label": "Have HR respond publicly", "tone": "unhinged"},
+                {"id": "B", "label": "Flag the review for removal", "tone": "midwit"},
+                {"id": "C", "label": "Ignore — it'll cycle off", "tone": "based"},
+            ],
+        },
+        "stats_deltas": {"morale": -3, "day": 3},
+    }
+
+def _gen_fb_recruit(company: str, state: RunState) -> Dict[str, Any]:
+    return {
+        "event_card": {
+            "category": "HIRING",
+            "severity": "S",
+            "title": "A recruiter ghosts mid-process",
+            "body": (
+                f"A senior eng candidate {company} has been courting for six "
+                "weeks just sent a one-line email: 'going in another direction, "
+                "thanks.' She joined a competitor. The competitor announces "
+                "her hire on Twitter that afternoon."
+            ),
+            "tags": ["hiring", "atmospheric"],
+            "choices": [
+                {"id": "A", "label": "Counter-poach two of her future teammates", "tone": "unhinged"},
+                {"id": "B", "label": "Post a 'we're hiring' thread anyway", "tone": "midwit"},
+                {"id": "C", "label": "Move on, she wasn't a culture fit", "tone": "based"},
+            ],
+        },
+        "stats_deltas": {"morale": -2, "headcount": 0, "day": 5},
+    }
+
+
+_TEMPLATE_FALLBACKS: Dict[str, list] = {
+    "delve": [
+        _delve_fb_deepdelver,
+        _delve_fb_garry_tan,
+        _delve_fb_cluely_quote,
+        _delve_fb_insight_check,
+        _delve_fb_forbes_call,
+        _delve_fb_anthropic_dropout,
+        _delve_fb_quiet,
+    ],
+}
+
+_GENERIC_FALLBACKS = [
+    _gen_fb_quiet,
+    _gen_fb_glassdoor,
+    _gen_fb_recruit,
+]
