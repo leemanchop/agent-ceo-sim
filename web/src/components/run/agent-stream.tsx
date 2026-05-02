@@ -415,6 +415,22 @@ export function AgentStream({
                             ORIGINAL ↑
                           </div>
                         )}
+                        {/* AGENT PICKED annotation — only visible after commit */}
+                        {revealCommitted && isAgentPick && (
+                          <div
+                            className="font-mono uppercase tracking-wider"
+                            style={{
+                              fontSize: 10,
+                              color: "var(--alarm)",
+                              fontWeight: 700,
+                              marginBottom: 3,
+                              paddingLeft: 4,
+                              letterSpacing: "0.1em",
+                            }}
+                          >
+                            ▌ AGENT PICKED ↓
+                          </div>
+                        )}
                         <button
                           type="button"
                           disabled={!isClickable}
@@ -547,7 +563,7 @@ export function AgentStream({
             )}
 
             {/* commit / consequences */}
-            {showCommit && committedChoice && (
+            {showCommit && (committedChoice || committed) && (
               <div className="mt-5 animate-event-in" style={{ fontFamily: "var(--font-body)" }}>
                 <div
                   className="flex items-center gap-2 font-mono uppercase tracking-wider"
@@ -565,12 +581,12 @@ export function AgentStream({
                       className="ml-2"
                       style={{
                         color:
-                          predicted === committedChoice.id
+                          predicted === (committedChoice?.id ?? committed)
                             ? "var(--ink)"
                             : "var(--alarm)",
                       }}
                     >
-                      {predicted === committedChoice.id
+                      {predicted === (committedChoice?.id ?? committed)
                         ? "✓ prediction correct"
                         : "✗ prediction missed"}
                     </span>
@@ -580,13 +596,22 @@ export function AgentStream({
                   className="mt-1.5 font-body"
                   style={{ fontSize: 14, color: "var(--ink)" }}
                 >
-                  doing: {committedChoice.label}.
+                  doing: {committedChoice?.label ?? `${committed} (unknown choice id)`}.
                 </div>
+                {!committedChoice && committed && (
+                  <div
+                    className="mt-1 font-mono"
+                    style={{ fontSize: 11, color: "var(--alarm)" }}
+                  >
+                    [debug] agent.commit returned id={JSON.stringify(committed)} —
+                    not in choices [{event?.choices.map((c) => c.id).join(", ")}]
+                  </div>
+                )}
                 <div
                   className="mt-1 font-body italic"
                   style={{ fontSize: 12, color: "var(--soft)" }}
                 >
-                  {event.justification}
+                  {event?.justification}
                 </div>
 
                 {/* tweet artifact card — X styling */}
