@@ -218,40 +218,34 @@ Generate this turn's output as STRICT JSON per the schema in your system
 prompt. No prose, no commentary, no code fence. Just the JSON object.
 """
 
-    msg = usage_tracker.tracked_messages_create(
-        run_id=state.run_id,
-        agent="oracle",
-        model=MODEL_ORACLE,
-        # Oracle output is verbose JSON — event card + 3-5 reactions + atmospheric
-        # + stats deltas + foreshadow updates. 2000 was getting truncated mid-JSON
-        # which fell through to the generic "Quiet day on the timeline" fallback.
-        # 3500 fits the full payload with headroom for longer reactions.
-        max_tokens=3500,
-        system=_build_system_blocks(),
-        messages=[{"role": "user", "content": user_prompt}],
-    )
+    def _call(model: str) -> str:
+        msg = usage_tracker.tracked_messages_create(
+            run_id=state.run_id,
+            agent="oracle",
+            model=model,
+            # Oracle output is verbose JSON — event card + 3-5 reactions + atmospheric
+            # + stats deltas + foreshadow updates. 4500 covers worst-case Haiku verbosity.
+            max_tokens=4500,
+            system=_build_system_blocks(),
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        return "".join(
+            b.text for b in msg.content if getattr(b, "type", None) == "text"
+        )
 
-    text = "".join(
-        b.text for b in msg.content if getattr(b, "type", None) == "text"
-    )
+    # Single-shot Haiku. If parse fails → immediate fallback. Speed > quality.
+    # Run keeps moving even when the LLM misbehaves; the user gets one
+    # generic turn instead of a 30-second wait.
+    text = _call(MODEL_ORACLE)
     parsed = _extract_json(text)
-    if parsed is None:
-        # The Oracle drifted (truncated JSON, malformed structure, etc.).
-        # Log loudly so we can diagnose, then raise — the route's error
-        # handler will trigger an exponential-backoff retry. We deliberately
-        # do NOT silently fall back to a generic event anymore; the user
-        # was seeing "Quiet day on the timeline" three times in a row
-        # because the fallback masked repeated parse failures.
-        truncated = len(text) >= 3400  # ~max_tokens * 0.97
-        print(
-            f"[oracle] turn={state.turn} run={state.run_id} "
-            f"JSON parse failed (len={len(text)}, truncated={truncated})"
-        )
-        print(f"[oracle] last 200 chars of output: {text[-200:]!r}")
-        raise RuntimeError(
-            f"oracle output unparseable (truncated={truncated})"
-        )
-    return parsed
+    if isinstance(parsed, dict) and parsed.get("event_card"):
+        return parsed
+    print(
+        f"[oracle] turn={state.turn} run={state.run_id} "
+        f"parse failed (len={len(text)}) — using fallback"
+    )
+    print(f"[oracle] tail: {text[-200:]!r}")
+    return _fallback_event(state)
 
 
 def _extract_json(text: str) -> Optional[Dict[str, Any]]:
