@@ -292,6 +292,8 @@ export type RunStreamHandlers = {
   onBible?: (bible: Partial<CompanyBible> & { display_name?: string }) => void;
   onResearchProgress?: (step: string, current?: number, total?: number) => void;
   onStreamReady?: () => void;
+  onPostMortemDelta?: (text: string) => void;
+  onPostMortemComplete?: (markdown: string) => void;
   onError: (message: string) => void;
   onClose: () => void;
 };
@@ -522,6 +524,35 @@ export function attachStream(
     };
     es.addEventListener("researcher.bible_complete", bibleListener as EventListener);
     listeners.push(["researcher.bible_complete", bibleListener as EventListener]);
+  }
+
+  // post_mortem.delta / post_mortem.complete: streamed Bloomberg/Levine-voice
+  // long-read at run end. Backend emits incremental text deltas, then a
+  // single complete event with the final markdown body. The post-mortem
+  // page reads the accumulated text via localStorage handoff.
+  if (handlers.onPostMortemDelta || handlers.onPostMortemComplete) {
+    const pmDeltaListener = (e: MessageEvent) => {
+      try {
+        const raw = JSON.parse(e.data);
+        const text = String(raw?.text ?? "");
+        if (text) handlers.onPostMortemDelta?.(text);
+      } catch {
+        /* ignore */
+      }
+    };
+    const pmCompleteListener = (e: MessageEvent) => {
+      try {
+        const raw = JSON.parse(e.data);
+        const markdown = String(raw?.markdown ?? raw?.body ?? "");
+        if (markdown) handlers.onPostMortemComplete?.(markdown);
+      } catch {
+        /* ignore */
+      }
+    };
+    es.addEventListener("post_mortem.delta", pmDeltaListener as EventListener);
+    es.addEventListener("post_mortem.complete", pmCompleteListener as EventListener);
+    listeners.push(["post_mortem.delta", pmDeltaListener as EventListener]);
+    listeners.push(["post_mortem.complete", pmCompleteListener as EventListener]);
   }
 
   // transport-level errors (network drop / 5xx) — surface and let caller decide

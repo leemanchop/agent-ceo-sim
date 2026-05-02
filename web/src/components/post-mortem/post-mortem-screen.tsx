@@ -62,6 +62,8 @@ export function PostMortemScreen({ endgame: serverEndgame, runId }: Props) {
       const handoff = JSON.parse(raw) as {
         endgame_id?: string;
         title?: string;
+        post_mortem_long_read?: string;
+        tagline?: string;
         bible?: {
           name?: string;
           display_name?: string;
@@ -80,6 +82,11 @@ export function PostMortemScreen({ endgame: serverEndgame, runId }: Props) {
         company_one_liner:
           handoff.bible?.one_liner ?? prev.company_one_liner,
         founder_name: handoff.bible?.founder ?? prev.founder_name,
+        // Real Opus-generated post-mortem from the SSE stream. Falls back
+        // to the demo if the run was mock-mode or the SSE didn't fire.
+        post_mortem_long_read:
+          handoff.post_mortem_long_read ?? prev.post_mortem_long_read,
+        tagline: handoff.tagline ?? prev.tagline,
       }));
     } catch {
       /* corrupt entry — keep server fallback */

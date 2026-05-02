@@ -566,6 +566,10 @@ export function useRun({
   // accumulator for streamed reasoning tokens — flushed onto the active
   // event when thought_complete arrives.
   const reasoningBufRef = useRef<string>("");
+  // Accumulator for the streamed post-mortem long-read at run end.
+  // Committed to localStorage on post_mortem.complete so the post-mortem
+  // page can read the real Bloomberg/Levine-voice prose instead of mock.
+  const postMortemBufRef = useRef<string>("");
 
   useEffect(() => {
     if (useMock) return;
@@ -915,6 +919,28 @@ export function useRun({
         onStreamReady: () => {
           // researcher done; main loop is about to start firing events.
           setPhase("ambient");
+        },
+        onPostMortemDelta: (text) => {
+          // Accumulate the streamed long-read into a ref so we don't
+          // re-render the run page on every token. The complete event
+          // commits it to localStorage for the post-mortem page to read.
+          postMortemBufRef.current = (postMortemBufRef.current || "") + text;
+        },
+        onPostMortemComplete: (markdown) => {
+          const finalText = markdown || postMortemBufRef.current || "";
+          postMortemBufRef.current = finalText;
+          if (typeof window !== "undefined" && finalText) {
+            try {
+              const key = `aces:run:${runId}:postmortem`;
+              const existing = localStorage.getItem(key);
+              const obj = existing ? JSON.parse(existing) : {};
+              obj.post_mortem_long_read = finalText;
+              obj.saved_at = new Date().toISOString();
+              localStorage.setItem(key, JSON.stringify(obj));
+            } catch {
+              /* localStorage may be disabled */
+            }
+          }
         },
         onClose: () => {
           /* no-op; detach handles teardown */
