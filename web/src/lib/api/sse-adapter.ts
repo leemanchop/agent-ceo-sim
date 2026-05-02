@@ -377,21 +377,25 @@ export function attachStream(
         console.warn(`[sse-adapter] failed to parse JSON for ${kind}:`, err);
         return;
       }
-      // Validate against the Zod schema; on failure, log + emit a synthetic
-      // system error so the UI surfaces the issue in-voice instead of crashing.
+      // Validate against the Zod schema. On failure: log a warning and STILL
+      // call the handler with the raw payload (cast to the expected type).
+      // Rationale: a single optional-field type mismatch (e.g. backend sends
+      // `null` for an optional string field) used to tear the whole event
+      // down, leaving the UI in a permanent "waiting" state. Resilient
+      // best-effort dispatch beats strict validation here — schemas are now
+      // observability, not gating.
       const result = parseSSEEvent(kind, raw);
+      const payload = result.ok
+        ? (result.data as SsePayloadByKind[K])
+        : (raw as SsePayloadByKind[K]);
       if (!result.ok) {
         // eslint-disable-next-line no-console
-        console.warn(`[sse-adapter] schema reject ${kind}: ${result.error}`);
-        try {
-          handlers.onError(`malformed ${kind}: ${result.error}`);
-        } catch {
-          /* swallow handler errors — we're already in an error path */
-        }
-        return;
+        console.warn(
+          `[sse-adapter] soft schema mismatch on ${kind}: ${result.error} — dispatching anyway`,
+        );
       }
       try {
-        fn(result.data as SsePayloadByKind[K]);
+        fn(payload);
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn(`[sse-adapter] handler threw on ${kind}:`, err);

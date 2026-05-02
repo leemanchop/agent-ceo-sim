@@ -82,16 +82,26 @@ def _build_fastapi():
 
     # CORS — production domain + Vercel previews + local dev. Hackathon-open;
     # tighten before public launch.
+    # CORS — accept apex + www + Vercel previews + localhost dev.
+    # Browsers preflight POSTs with OPTIONS; this middleware short-circuits
+    # those before they hit the route layer. Origins listed both as exact
+    # matches (preferred) and as a regex (covers preview deploys).
     fapi.add_middleware(
         CORSMiddleware,
         allow_origins=[
             "https://30u30.fail",
+            "https://www.30u30.fail",
+            "http://localhost:3000",
             "http://localhost:3001",
+            "http://localhost:3002",
         ],
-        allow_origin_regex=r"https://.*\.vercel\.app",
+        # vercel preview deploys + 30u30.fail subdomain catch-all
+        allow_origin_regex=r"https://(.*\.vercel\.app|.*\.30u30\.fail)",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["*"],
+        max_age=86400,  # cache preflight for 24h
     )
 
     @fapi.get("/healthz")

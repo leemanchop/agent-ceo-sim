@@ -565,6 +565,28 @@ export function AgentStream({
             {/* commit / consequences */}
             {showCommit && (committedChoice || committed) && (
               <div className="mt-5 animate-event-in" style={{ fontFamily: "var(--font-body)" }}>
+                {/* BIG verdict banner — only in spectate mode after prediction */}
+                {mode === "spectate" && predicted && (() => {
+                  const correct = predicted === (committedChoice?.id ?? committed);
+                  return (
+                    <div
+                      className="font-mono uppercase mb-3 animate-event-in"
+                      style={{
+                        display: "inline-block",
+                        padding: "8px 14px",
+                        border: `2px solid ${correct ? "var(--ink)" : "var(--alarm)"}`,
+                        background: correct ? "transparent" : "var(--alarm-soft)",
+                        color: correct ? "var(--ink)" : "var(--alarm)",
+                        fontSize: 14,
+                        fontWeight: 700,
+                        letterSpacing: "0.12em",
+                        transform: "rotate(-1.5deg)",
+                      }}
+                    >
+                      {correct ? "✓ YOU CALLED IT" : "✗ YOU MISSED"}
+                    </div>
+                  );
+                })()}
                 <div
                   className="flex items-center gap-2 font-mono uppercase tracking-wider"
                   style={{ fontSize: 10 }}
@@ -576,21 +598,6 @@ export function AgentStream({
                   <span style={{ color: "var(--alarm)" }}>
                     {mode === "ceo" ? "you committed" : "agent committed"}
                   </span>
-                  {mode === "spectate" && predicted && (
-                    <span
-                      className="ml-2"
-                      style={{
-                        color:
-                          predicted === (committedChoice?.id ?? committed)
-                            ? "var(--ink)"
-                            : "var(--alarm)",
-                      }}
-                    >
-                      {predicted === (committedChoice?.id ?? committed)
-                        ? "✓ prediction correct"
-                        : "✗ prediction missed"}
-                    </span>
-                  )}
                 </div>
                 <div
                   className="mt-1.5 font-body"

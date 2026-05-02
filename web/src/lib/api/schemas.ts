@@ -77,54 +77,58 @@ export const StreamOpenSchema = z.object({
 
 export const TurnStartSchema = z.object({
   turn: z.number(),
-  day_elapsed: z.number().optional(),
+  day_elapsed: z.number().nullable().optional(),
   stats: WireStatsSchema,
 });
 
 export const EventMaterializeSchema = z.object({
   event_id: z.string(),
   category: z.string(),
-  category_color: z.string().optional(),
+  category_color: z.string().nullable().optional(),
   title: z.string(),
-  body: z.string(),
+  body: z.string().nullable().optional().default(""),
   severity: SeveritySchema,
-  tags: z.array(z.string()).default([]),
+  tags: z.array(z.string()).nullable().optional().default([]),
 });
 
 export const AgentThoughtTokenSchema = z.object({
   token: z.string(),
-  stream_id: z.string(),
+  stream_id: z.string().nullable().optional().default(""),
 });
 
 export const AgentThoughtCompleteSchema = z.object({
-  stream_id: z.string(),
-  full_text: z.string().optional(),
+  stream_id: z.string().nullable().optional().default(""),
+  full_text: z.string().nullable().optional(),
 });
 
 export const ChoicesAppearSchema = z.object({
   choices: z.array(ChoiceWireSchema),
-  prediction_window_seconds: z.number().optional(),
+  prediction_window_seconds: z.number().nullable().optional(),
 });
 
 export const AgentDeliberationTokenSchema = z.object({
   token: z.string(),
-  stream_id: z.string(),
+  stream_id: z.string().nullable().optional().default(""),
 });
 
+// `.nullable().optional()` accepts string | null | undefined. Backend Python
+// often emits explicit `null` when a field is empty (vs JS `undefined`). Strict
+// `.string().optional()` rejects null → handler never fires → cockpit hangs.
+// All optional string fields use the nullable+optional pattern.
 export const AgentCommitSchema = z.object({
   choice_id: z.string(),
-  justification: z.string().optional().default(""),
-  stream_id: z.string().optional(),
-  artifact_tweet: z.string().optional(),
+  justification: z.string().nullable().optional().default(""),
+  stream_id: z.string().nullable().optional(),
+  artifact_tweet: z.string().nullable().optional(),
 });
 
 export const ConsequencesAppliedSchema = z.object({
-  stat_deltas: z.record(z.number()).default({}),
-  seeds_planted: z.array(z.string()).default([]),
-  seeds_paid_off: z.array(z.string()).default([]),
-  next_event_in_seconds: z.number().optional(),
-  artifact_tweet: z.string().optional(),
-  effects_summary: z.array(EffectChipSchema).optional(),
+  stat_deltas: z.record(z.number()).nullable().optional().default({}),
+  seeds_planted: z.array(z.string()).nullable().optional().default([]),
+  seeds_paid_off: z.array(z.string()).nullable().optional().default([]),
+  next_event_in_seconds: z.number().nullable().optional(),
+  artifact_tweet: z.string().nullable().optional(),
+  effects_summary: z.array(EffectChipSchema).nullable().optional(),
 });
 
 export const FeedTweetSchema = z.object({

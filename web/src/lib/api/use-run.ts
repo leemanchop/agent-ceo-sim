@@ -766,12 +766,14 @@ export function useRun({
             return curEv;
           });
           setPhase("consequences");
-          // After ~1.2s, transition to "advancing" so the WaitingPill flips
-          // from "consequences settling" → "oracle generating next event".
-          // The phase will jump to "event_in" on the next onEvent, regardless.
+          // After ~4s the consequences animation has finished AND the user
+          // has had time to see the reveal callout + agent pick. Then flip
+          // the WaitingPill to "oracle generating next event". The phase
+          // will jump to "event_in" on the next onEvent (which usually
+          // arrives BEFORE this timeout fires now that Oracle is pre-fetched).
           setTimeout(() => {
             setPhase((p) => (p === "consequences" ? "advancing" : p));
-          }, 1200);
+          }, 4000);
         },
         onFeedItem: (item) => {
           setFeed((prev) => [item, ...prev].slice(0, 200));
