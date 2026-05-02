@@ -104,6 +104,11 @@ PER TURN, YOUR JOB IS:
    fraud_score (0..100), day (int — increments by 7-21).
 
 OUTPUT FORMAT — STRICT JSON ONLY. NO PROSE BEFORE OR AFTER.
+NO MARKDOWN CODE FENCES. NO COMMENTS. NO TRAILING COMMAS.
+Inside string values: use \\n for newlines, \\" for quotes. NEVER include
+a literal newline inside a string. NEVER include // or /* */ comments.
+NEVER include extra fields beyond the schema below — schemas with extra
+keys break the parser. Begin your output with {{ and end with }}.
 
 {{
   "event_card": {{
@@ -250,37 +255,111 @@ prompt. No prose, no commentary, no code fence. Just the JSON object.
 
 
 def _extract_json(text: str) -> Optional[Dict[str, Any]]:
+    """Multi-pass JSON extractor for Oracle output. Tries (in order):
+       1. Raw text
+       2. Stripped code fence
+       3. Outermost {...} block
+       4. Sanitized (trailing commas / comments / single-quote / control-char fixes)
+       5. Truncation repair (close unclosed brackets)
+    Returns the parsed dict or None.
+    """
     if not text:
         return None
-    # Try: as-is, then strip code fences.
-    for candidate in [text, _strip_fence(text)]:
+
+    last_err: Optional[str] = None
+
+    def _try(label: str, candidate: str) -> Optional[Dict[str, Any]]:
+        nonlocal last_err
         try:
             return json.loads(candidate)
-        except Exception:
-            pass
-    # Try: outermost balanced {...} block.
-    m = re.search(r"\{.*\}", text, re.DOTALL)
-    if m:
-        block = m.group(0)
-        try:
-            return json.loads(block)
-        except Exception:
-            pass
-        # Final attempt: REPAIR truncated JSON. Haiku output sometimes hits
-        # max_tokens mid-string-or-array. Try closing unclosed braces/brackets
-        # and stripping a trailing partial value. Best-effort — if the repair
-        # produces something parseable with at least an event_card, use it;
-        # otherwise give up.
-        repaired = _repair_truncated_json(block)
+        except Exception as e:
+            last_err = f"{label}: {e}"
+            return None
+
+    # Pass 1: as-is.
+    obj = _try("raw", text)
+    if isinstance(obj, dict):
+        return obj
+
+    # Pass 2: strip fence.
+    stripped = _strip_fence(text)
+    obj = _try("fence-stripped", stripped)
+    if isinstance(obj, dict):
+        return obj
+
+    # Pass 3: outermost {...} block.
+    m = re.search(r"\{.*\}", stripped, re.DOTALL)
+    if not m:
+        m = re.search(r"\{.*\}", text, re.DOTALL)
+    block = m.group(0) if m else None
+    if block:
+        obj = _try("outer-block", block)
+        if isinstance(obj, dict):
+            return obj
+
+        # Pass 4: sanitize common LLM mistakes.
+        sanitized = _sanitize_json(block)
+        obj = _try("sanitized", sanitized)
+        if isinstance(obj, dict):
+            print("[oracle] recovered via JSON sanitization")
+            return obj
+
+        # Pass 5: try truncation repair on top of sanitized.
+        repaired = _repair_truncated_json(sanitized)
         if repaired is not None:
-            try:
-                obj = json.loads(repaired)
-                if isinstance(obj, dict) and obj.get("event_card"):
-                    print(f"[oracle] recovered from truncation via JSON repair")
-                    return obj
-            except Exception:
-                pass
+            obj = _try("repaired", repaired)
+            if isinstance(obj, dict) and obj.get("event_card"):
+                print("[oracle] recovered via JSON repair")
+                return obj
+
+    print(f"[oracle] all JSON parse attempts failed. last error: {last_err}")
     return None
+
+
+def _sanitize_json(text: str) -> str:
+    """Fix common LLM JSON output mistakes:
+       - Strip JSON-incompatible // and /* */ comments
+       - Replace trailing commas before ] or }
+       - Escape literal newlines/tabs inside string values (LLM forgets \\n)
+       - Convert smart quotes to plain
+    """
+    s = text
+    # Smart quotes → plain
+    s = s.replace("“", '"').replace("”", '"')
+    s = s.replace("‘", "'").replace("’", "'")
+    # Strip // line comments
+    s = re.sub(r"(?<!:)//[^\n]*", "", s)
+    # Strip /* ... */ block comments
+    s = re.sub(r"/\*.*?\*/", "", s, flags=re.DOTALL)
+    # Trailing commas before } or ]
+    s = re.sub(r",(\s*[\}\]])", r"\1", s)
+    # Escape literal newlines / tabs / carriage returns inside strings.
+    # We walk the text manually: when inside a string, replace control chars.
+    out = []
+    in_string = False
+    escape = False
+    for ch in s:
+        if escape:
+            out.append(ch)
+            escape = False
+            continue
+        if ch == "\\":
+            out.append(ch)
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            out.append(ch)
+            continue
+        if in_string and ch == "\n":
+            out.append("\\n")
+        elif in_string and ch == "\r":
+            out.append("\\r")
+        elif in_string and ch == "\t":
+            out.append("\\t")
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 def _repair_truncated_json(text: str) -> Optional[str]:
