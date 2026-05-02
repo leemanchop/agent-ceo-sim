@@ -258,14 +258,83 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
             return json.loads(candidate)
         except Exception:
             pass
-    # Last try: find the outermost {...} block.
+    # Try: outermost balanced {...} block.
     m = re.search(r"\{.*\}", text, re.DOTALL)
     if m:
+        block = m.group(0)
         try:
-            return json.loads(m.group(0))
+            return json.loads(block)
         except Exception:
-            return None
+            pass
+        # Final attempt: REPAIR truncated JSON. Haiku output sometimes hits
+        # max_tokens mid-string-or-array. Try closing unclosed braces/brackets
+        # and stripping a trailing partial value. Best-effort — if the repair
+        # produces something parseable with at least an event_card, use it;
+        # otherwise give up.
+        repaired = _repair_truncated_json(block)
+        if repaired is not None:
+            try:
+                obj = json.loads(repaired)
+                if isinstance(obj, dict) and obj.get("event_card"):
+                    print(f"[oracle] recovered from truncation via JSON repair")
+                    return obj
+            except Exception:
+                pass
     return None
+
+
+def _repair_truncated_json(text: str) -> Optional[str]:
+    """Best-effort repair for an LLM JSON output that ran out of tokens.
+    Strips trailing partial token, closes any unclosed strings, then balances
+    braces and brackets. Returns None if we can't make sense of it."""
+    if not text:
+        return None
+    s = text.rstrip()
+    # If we ended mid-string (odd number of unescaped quotes), close it.
+    in_string = False
+    escape = False
+    bracket_stack: list[str] = []
+    last_safe = 0
+    for i, ch in enumerate(s):
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch in "{[":
+            bracket_stack.append(ch)
+        elif ch in "}]":
+            if bracket_stack:
+                bracket_stack.pop()
+            else:
+                # malformed
+                return None
+        if not in_string and not bracket_stack:
+            # parsed-balanced point; remember it
+            last_safe = i + 1
+    # Truncate trailing partial-value if we ended mid-string or after a ,
+    if last_safe > 0 and last_safe < len(s):
+        s = s[:last_safe]
+    else:
+        # Drop trailing partial token after last comma to avoid `... ,"foo": "bar` half-strings
+        # Find last clean structural break.
+        m = re.search(r'(.*[\}\]])\s*,?\s*"[^"]*$', s, re.DOTALL)
+        if m:
+            s = m.group(1)
+        # Close unclosed string if any.
+        if in_string:
+            s = s + '"'
+        # Close any open brackets.
+        while bracket_stack:
+            top = bracket_stack.pop()
+            s = s + ("}" if top == "{" else "]")
+    return s
 
 
 def _strip_fence(text: str) -> str:

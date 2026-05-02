@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Dashboard } from "@/components/run/dashboard";
@@ -418,6 +418,12 @@ export default function RunPage() {
         </Tabs>
       </div>
 
+      {runEnded && (
+        <RunEndedModal
+          runId={runId}
+          companyName={bible.display_name}
+        />
+      )}
       {runEnded ? (
         <EndOfRunStrip
           runId={runId}
@@ -633,5 +639,131 @@ function RunParamsBadge({
         {craziness.toUpperCase()}
       </span>
     </span>
+  );
+}
+
+/**
+ * Modal that pops up the moment a run terminates. Tells the user to go view
+ * the post-mortem trading card. Brutalist styling, dismissable, but with a
+ * clear primary CTA.
+ */
+function RunEndedModal({
+  runId,
+  companyName,
+}: {
+  runId: string;
+  companyName: string;
+}) {
+  const [dismissed, setDismissed] = useState(false);
+  if (dismissed) return null;
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 60,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "rgba(0, 0, 0, 0.78)",
+        backdropFilter: "blur(2px)",
+      }}
+      onClick={() => setDismissed(true)}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="animate-event-in"
+        style={{
+          width: "min(480px, 92vw)",
+          background: "var(--paper)",
+          border: "2px solid var(--alarm)",
+          padding: "28px 26px",
+          fontFamily: "var(--font-body)",
+        }}
+      >
+        <div
+          className="font-mono uppercase mb-4"
+          style={{
+            display: "inline-block",
+            border: "2px solid var(--alarm)",
+            background: "var(--alarm-soft)",
+            color: "var(--alarm)",
+            padding: "6px 14px",
+            fontSize: 12,
+            fontWeight: 700,
+            letterSpacing: "0.16em",
+            transform: "rotate(-2deg)",
+          }}
+        >
+          RUN ENDED · {companyName.toUpperCase()}
+        </div>
+        <h2
+          className="font-body"
+          style={{
+            fontSize: 26,
+            lineHeight: 1.2,
+            color: "var(--ink)",
+            marginTop: 8,
+            marginBottom: 12,
+          }}
+        >
+          the agent has run its course.
+        </h2>
+        <p
+          className="font-body"
+          style={{
+            fontSize: 15,
+            color: "var(--ink-2)",
+            lineHeight: 1.5,
+            marginBottom: 6,
+          }}
+        >
+          your post-mortem is ready. trading card, share image, the whole
+          forbes-cursed treatment. 1080×1350 png if you want to flex on
+          twitter.
+        </p>
+        <p
+          className="font-body italic"
+          style={{
+            fontSize: 12,
+            color: "var(--soft)",
+            marginBottom: 22,
+          }}
+        >
+          there is no second act. only the post-mortem.
+        </p>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <Link
+            href={`/run/${runId}/post-mortem`}
+            className="brutalist-btn"
+            style={{
+              fontSize: 14,
+              padding: "12px 20px",
+              flex: 1,
+              textAlign: "center",
+              textDecoration: "none",
+            }}
+          >
+            → VIEW POST-MORTEM
+          </Link>
+          <button
+            onClick={() => setDismissed(true)}
+            className="font-mono uppercase tracking-wider"
+            style={{
+              fontSize: 11,
+              padding: "12px 20px",
+              border: "1.4px solid var(--ink)",
+              background: "transparent",
+              color: "var(--ink)",
+              cursor: "pointer",
+            }}
+          >
+            keep watching
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

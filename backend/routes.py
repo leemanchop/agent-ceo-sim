@@ -478,6 +478,39 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                         "artifact_tweet": artifacts.get("tweet", ""),
                     })
 
+                    # ---- EARLY PREFETCH: kick off the next Oracle NOW ----
+                    # Was: this lived after consequences.applied. Moving it
+                    # before editor/consequences gives the Oracle ~3-5 extra
+                    # seconds of head-start, hiding more of the LLM latency
+                    # behind the natural reveal animation. By the time the
+                    # user sees the tweet artifact + stat ripples, the next
+                    # Oracle is usually already done.
+                    if (
+                        state.turn + 1 <= state.max_turns()
+                        and getattr(state, "_next_oracle_task", None) is None
+                    ):
+                        early_last_ceo = {
+                            "choice_id": chosen_id,
+                            "justification": justification,
+                            "tweet": artifacts.get("tweet", ""),
+                        }
+                        try:
+                            state._next_oracle_task = asyncio.create_task(  # type: ignore[attr-defined]
+                                asyncio.to_thread(
+                                    run_oracle,
+                                    state=state,
+                                    last_ceo_commit=early_last_ceo,
+                                )
+                            )
+                            def _ignore_exc_early(t: Any) -> None:
+                                try:
+                                    _ = t.exception()
+                                except Exception:
+                                    pass
+                            state._next_oracle_task.add_done_callback(_ignore_exc_early)  # type: ignore[attr-defined]
+                        except Exception:
+                            state._next_oracle_task = None  # type: ignore[attr-defined]
+
                     # ---- 4) Editor pass — fire-and-forget ----
                     # The editor's LLM call (~1-2s) used to block before we
                     # applied consequences. Move it to a background task so
@@ -556,41 +589,10 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                         "next_event_in_seconds": _gap_for_speed(state.speed),
                     })
 
-                    # ---- 5a) Pre-fetch the NEXT Oracle in parallel ----
-                    # Kick off the next-turn Oracle call now so the LLM
-                    # latency happens during consequences/feed/findings, not
-                    # as a wall-clock gap before the next event materializes.
-                    # Stashed on state; awaited at the top of the next loop
-                    # iteration.
-                    if state.turn + 1 <= state.max_turns():
-                        next_last_ceo = _last_ceo_commit_for_oracle(state)
-                        try:
-                            state._next_oracle_task = asyncio.create_task(  # type: ignore[attr-defined]
-                                asyncio.to_thread(
-                                    run_oracle,
-                                    state=state,
-                                    last_ceo_commit=next_last_ceo,
-                                )
-                            )
-                            # Suppress "Task exception was never retrieved"
-                            # warnings when this prefetch is awaited at the
-                            # top of the next iteration. We DO retrieve it
-                            # there; this is a belt for the rare case where
-                            # the run ends/cancels before next iteration.
-                            def _ignore_exc(t: Any) -> None:
-                                try:
-                                    _ = t.exception()
-                                except Exception:
-                                    pass
-                            state._next_oracle_task.add_done_callback(_ignore_exc)  # type: ignore[attr-defined]
-                        except Exception as e:  # pragma: no cover
-                            import traceback
-                            print(
-                                f"[oracle-prefetch] turn={state.turn} "
-                                f"run={state.run_id} failed: {e!r}"
-                            )
-                            traceback.print_exc()
-                            state._next_oracle_task = None  # type: ignore[attr-defined]
+                    # NOTE: pre-fetch was moved to fire IMMEDIATELY after
+                    # agent.commit (above), giving Oracle ~3-5s of extra
+                    # head-start. By the time we get here, the prefetch task
+                    # is already running.
 
                     # ---- 5b) Editor decision (was kicked off after commit) ----
                     try:
