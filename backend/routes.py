@@ -318,13 +318,36 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                             oracle_out = await asyncio.to_thread(
                                 run_oracle, state=state, last_ceo_commit=last_ceo
                             )
-                    except Exception:  # pragma: no cover
-                        yield _system_error_sse(
-                            "the world stuttered for a second — recovering",
+                    except Exception as e:  # pragma: no cover
+                        # Log the actual exception so we can diagnose Oracle
+                        # failures (token-budget, rate-limit, JSON parse, etc.)
+                        # — silently swallowing was leaving runs stuck in a
+                        # retry loop for 30+ seconds with no visibility.
+                        import traceback
+                        print(
+                            f"[oracle] turn={state.turn} run={state.run_id} "
+                            f"failed (consecutive={getattr(state, '_oracle_fail_count', 0) + 1}): {e!r}"
                         )
-                        await asyncio.sleep(1.0)
+                        traceback.print_exc()
+                        # Cap consecutive failures: 3 strikes → endgame.
+                        # Avoids runaway retry loops if the LLM is wedged.
+                        fails = getattr(state, "_oracle_fail_count", 0) + 1
+                        state._oracle_fail_count = fails  # type: ignore[attr-defined]
+                        if fails >= 3:
+                            yield _system_error_sse(
+                                "oracle disconnected. forcing endgame.",
+                            )
+                            async for chunk in _emit_endgame(state, sse):
+                                yield chunk
+                            return
+                        yield _system_error_sse(
+                            f"the world stuttered ({fails}/3) — recovering",
+                        )
+                        await asyncio.sleep(2.0 * fails)  # exponential back-off
                         state.turn -= 1
                         continue
+                    # Reset the failure counter on any successful turn.
+                    state._oracle_fail_count = 0  # type: ignore[attr-defined]
                     event_card = oracle_out.get("event_card", {}) or {}
 
                     yield sse("turn.start", {
@@ -376,7 +399,12 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                             yield ": ping\n\n"
                     try:
                         ceo_out = await ceo_task
-                    except Exception:  # pragma: no cover
+                    except Exception as e:  # pragma: no cover
+                        import traceback
+                        print(
+                            f"[ceo] turn={state.turn} run={state.run_id} failed: {e!r}"
+                        )
+                        traceback.print_exc()
                         yield _system_error_sse(
                             "agent went silent. legal team confiscated phone.",
                         )
@@ -532,13 +560,33 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                     # iteration.
                     if state.turn + 1 <= state.max_turns():
                         next_last_ceo = _last_ceo_commit_for_oracle(state)
-                        state._next_oracle_task = asyncio.create_task(  # type: ignore[attr-defined]
-                            asyncio.to_thread(
-                                run_oracle,
-                                state=state,
-                                last_ceo_commit=next_last_ceo,
+                        try:
+                            state._next_oracle_task = asyncio.create_task(  # type: ignore[attr-defined]
+                                asyncio.to_thread(
+                                    run_oracle,
+                                    state=state,
+                                    last_ceo_commit=next_last_ceo,
+                                )
                             )
-                        )
+                            # Suppress "Task exception was never retrieved"
+                            # warnings when this prefetch is awaited at the
+                            # top of the next iteration. We DO retrieve it
+                            # there; this is a belt for the rare case where
+                            # the run ends/cancels before next iteration.
+                            def _ignore_exc(t: Any) -> None:
+                                try:
+                                    _ = t.exception()
+                                except Exception:
+                                    pass
+                            state._next_oracle_task.add_done_callback(_ignore_exc)  # type: ignore[attr-defined]
+                        except Exception as e:  # pragma: no cover
+                            import traceback
+                            print(
+                                f"[oracle-prefetch] turn={state.turn} "
+                                f"run={state.run_id} failed: {e!r}"
+                            )
+                            traceback.print_exc()
+                            state._next_oracle_task = None  # type: ignore[attr-defined]
 
                     # ---- 5b) Editor decision (was kicked off after commit) ----
                     try:
