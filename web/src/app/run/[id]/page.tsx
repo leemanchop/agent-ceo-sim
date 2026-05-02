@@ -56,6 +56,7 @@ export default function RunPage() {
     archive,
     originalPredictions,
     researchProgress,
+    researchLog,
     eventIdx,
     predict: onPredict,
     commit: onCommit,
@@ -359,6 +360,7 @@ export default function RunPage() {
             bible={bible}
             event={event}
             researchProgress={researchProgress}
+            researchLog={researchLog}
             templateId={search.get("template")}
             liveMode={getApiMode() !== "mock"}
             predicted={predicted}

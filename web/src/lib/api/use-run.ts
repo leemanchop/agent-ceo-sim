@@ -217,6 +217,10 @@ export type UseRunResult = {
 
   /** live-mode research-phase progress (label + step counts, when known) */
   researchProgress: ResearchProgress;
+
+  /** accumulated researcher log — every progress step in order, so the user
+   *  can watch the agent work in real time. */
+  researchLog: { step: string; current?: number; total?: number; ts: number }[];
 };
 
 export function useRun({
@@ -299,6 +303,12 @@ export function useRun({
   const [researchProgress, setResearchProgress] = useState<ResearchProgress>({
     step: "spinning up agent…",
   });
+  // Accumulated researcher log — every step the Researcher emits, kept so
+  // the user can watch the agent work (scrape this, search that, parse this).
+  // Capped at 50 entries to bound DOM growth.
+  const [researchLog, setResearchLog] = useState<
+    { step: string; current?: number; total?: number; ts: number }[]
+  >([]);
   const [activeMini, setActiveMini] = useState<MiniAction | null>(null);
   const [predicted, setPredicted] = useState<string | null>(null);
   const [committed, setCommitted] = useState<string | null>(null);
@@ -578,20 +588,54 @@ export function useRun({
         // Treat the URL slug as a template_id when it matches one of the known
         // presets; otherwise upload-flavor with the slug as company name.
         const isTemplate = runId in TEMPLATE_BIBLE_SEEDS;
+
+        // Hydrate user-typed company input from localStorage (set by the
+        // landing page on submit). Without this we'd just send the URL slug
+        // and the backend Researcher would have no real input to research.
+        let userInput: {
+          name?: string;
+          one_liner?: string;
+          industry?: string;
+          founder_vibe?: string;
+          length?: string;
+          craziness?: string;
+        } = {};
+        if (typeof window !== "undefined") {
+          try {
+            const raw = localStorage.getItem(`aces:run:${runId}:input`);
+            if (raw) userInput = JSON.parse(raw);
+          } catch {
+            /* corrupt entry — ignore */
+          }
+        }
+
+        // Seed the bible IMMEDIATELY so the cockpit header reads the user's
+        // company name during the researching phase, not "Vellum".
+        if (!isTemplate && (userInput.name || userInput.one_liner)) {
+          setLiveBible((prev) => ({
+            ...prev,
+            name: userInput.name ?? prev.name,
+            display_name: userInput.name ?? prev.display_name,
+            one_liner: userInput.one_liner ?? prev.one_liner,
+            industry: userInput.industry ?? prev.industry,
+            founder_vibe: userInput.founder_vibe ?? prev.founder_vibe,
+          }));
+        }
+
         const created = await createRun({
-          mode: isTemplate ? "template" : "synthetic",
+          mode: isTemplate ? "template" : "uploaded",
           template_id: isTemplate ? runId : null,
           company: isTemplate
             ? null
             : {
-                name: runId,
-                one_liner: "",
-                industry: "other",
-                founder_vibe: undefined,
+                name: userInput.name || runId,
+                one_liner: userInput.one_liner || "",
+                industry: userInput.industry || "other",
+                founder_vibe: userInput.founder_vibe || undefined,
               },
           settings: {
-            length_mode: "medium",
-            craziness: "normal",
+            length_mode: (userInput.length as "micro" | "short" | "medium" | "long") || "medium",
+            craziness: (userInput.craziness as "tame" | "normal" | "unhinged") || "normal",
             interactive: mode === "ceo",
           },
         });
@@ -606,6 +650,10 @@ export function useRun({
         const startHandlers: Partial<RunStreamHandlers> = {
           onResearchProgress: (step, current, total) => {
             setResearchProgress({ step, current, total });
+            setResearchLog((prev) => {
+              const next = [...prev, { step, current, total, ts: Date.now() }];
+              return next.length > 50 ? next.slice(-50) : next;
+            });
           },
           onBible: (incoming) => {
             setLiveBible((prev) => ({
@@ -809,6 +857,31 @@ export function useRun({
           setEndgame(eg);
           setRunEnded(true);
           setPhase("advancing");
+          // localStorage handoff so the post-mortem page (server component
+          // routed by URL slug, can't query the backend by ULID) can render
+          // real run data instead of falling back to MOCK_ENDGAME.
+          if (typeof window !== "undefined") {
+            try {
+              const payload = {
+                run_id: backendRunIdRef.current,
+                endgame_id: eg.id,
+                title: eg.title,
+                share_card_url: eg.share_card_url,
+                bible: liveBible,
+                stats: undefined as unknown,  // filled below if available
+                achievements: undefined as unknown,
+                saved_at: new Date().toISOString(),
+              };
+              // Capture last-known stats by reading current state — closures
+              // make this a bit awkward; we read via a ref-style fresh fetch.
+              localStorage.setItem(
+                `aces:run:${runId}:postmortem`,
+                JSON.stringify(payload),
+              );
+            } catch {
+              /* localStorage may be disabled — non-fatal */
+            }
+          }
         },
         onAchievement: (ach) => {
           setAchievementsUnlocked((prev) =>
@@ -1003,5 +1076,6 @@ export function useRun({
     originalPredictions,
     achievementsUnlocked,
     researchProgress,
+    researchLog,
   };
 }

@@ -43,12 +43,48 @@ async function loadHtmlToImage(): Promise<
   }
 }
 
-export function PostMortemScreen({ endgame, runId }: Props) {
+export function PostMortemScreen({ endgame: serverEndgame, runId }: Props) {
   const cardRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [scale, setScale] = useState(1);
   const [downloading, setDownloading] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+
+  // Hydrate from the localStorage handoff written by the run page on
+  // endgame.reached. This is the ONLY way to get real run data into a page
+  // routed by URL slug (the backend keys runs by ULID, not slug).
+  const [endgame, setEndgame] = useState<EndgameSnapshot>(serverEndgame);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = localStorage.getItem(`aces:run:${runId}:postmortem`);
+      if (!raw) return;
+      const handoff = JSON.parse(raw) as {
+        endgame_id?: string;
+        title?: string;
+        bible?: {
+          name?: string;
+          display_name?: string;
+          one_liner?: string;
+          founder?: string;
+          industry?: string;
+        };
+      };
+      const company =
+        handoff.bible?.display_name ?? handoff.bible?.name ?? null;
+      setEndgame((prev) => ({
+        ...prev,
+        endgame_id: handoff.endgame_id ?? prev.endgame_id,
+        title: handoff.title ?? prev.title,
+        company_name: company ? company.toUpperCase() : prev.company_name,
+        company_one_liner:
+          handoff.bible?.one_liner ?? prev.company_one_liner,
+        founder_name: handoff.bible?.founder ?? prev.founder_name,
+      }));
+    } catch {
+      /* corrupt entry — keep server fallback */
+    }
+  }, [runId]);
 
   // responsive scale: fit the 1080×1350 card into the available stage width
   useEffect(() => {

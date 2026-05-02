@@ -65,9 +65,33 @@ export default function LandingPage() {
   }
 
   function start() {
-    const slug = name.trim()
-      ? name.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 24)
+    const trimmed = name.trim();
+    const slug = trimmed
+      ? trimmed.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 24)
       : "demo";
+    // Persist what the user typed so the run page can pass it to createRun
+    // and seed the bible immediately. localStorage handoff > URL params here
+    // because oneliner can be long enough to bloat the URL.
+    if (typeof window !== "undefined") {
+      try {
+        const payload = {
+          name: trimmed || slug,
+          one_liner: oneliner.trim(),
+          industry,
+          founder_vibe: vibe,
+          length,
+          craziness: crazy,
+          mode,
+          saved_at: new Date().toISOString(),
+        };
+        localStorage.setItem(
+          `aces:run:${slug}:input`,
+          JSON.stringify(payload),
+        );
+      } catch {
+        /* localStorage may be disabled — non-fatal */
+      }
+    }
     router.push(`/run/${slug || "demo"}?${buildSearch()}`);
   }
 

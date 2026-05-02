@@ -25,6 +25,7 @@ export function AgentStream({
   bible,
   event,
   researchProgress,
+  researchLog,
   templateId = null,
   liveMode = false,
   predicted,
@@ -41,6 +42,7 @@ export function AgentStream({
   bible: CompanyBible;
   event: ActiveEvent | undefined;
   researchProgress?: { step: string; current?: number; total?: number };
+  researchLog?: { step: string; current?: number; total?: number; ts: number }[];
   /** non-null when running a pre-built template — researcher is just streaming
    *  a pre-authored bible at fake-research speed for UX continuity. */
   templateId?: string | null;
@@ -227,7 +229,66 @@ export function AgentStream({
                 ? "no web research happens for presets. the historical record is hand-authored."
                 : "landing page, founder posts, recent press, podcast appearances. ~30-90 seconds. don't close the tab."}
             </div>
-            {researchProgress && (
+            {/* Researcher log — visible scrolling list of every step the
+                Researcher emits. Only populated for uploaded runs (real
+                research); template runs collapse to a single fast beat. */}
+            {!templateId && researchLog && researchLog.length > 0 && (
+              <div
+                className="font-mono mt-2 w-full animate-event-in"
+                style={{
+                  border: "1.4px solid var(--ink)",
+                  background: "var(--paper-2)",
+                  padding: "10px 12px",
+                  maxHeight: 260,
+                  overflowY: "auto",
+                  fontSize: 12,
+                  color: "var(--ink-2)",
+                  lineHeight: 1.5,
+                }}
+              >
+                <div
+                  className="font-mono uppercase mb-2"
+                  style={{
+                    fontSize: 9,
+                    color: "var(--alarm)",
+                    fontWeight: 700,
+                    letterSpacing: "0.12em",
+                  }}
+                >
+                  ▌ RESEARCHER · LIVE LOG
+                </div>
+                {researchLog.map((entry, i) => {
+                  const isLast = i === researchLog.length - 1;
+                  return (
+                    <div
+                      key={`${entry.ts}-${i}`}
+                      style={{
+                        opacity: isLast ? 1 : 0.62,
+                        borderLeft: isLast
+                          ? "2px solid var(--alarm)"
+                          : "2px solid var(--soft)",
+                        paddingLeft: 8,
+                        marginBottom: 3,
+                        wordBreak: "break-word",
+                      }}
+                    >
+                      <span className="text-soft">researcher ›</span>{" "}
+                      {entry.step}
+                      {typeof entry.current === "number" &&
+                        typeof entry.total === "number" && (
+                          <span className="text-soft">
+                            {" "}
+                            [{entry.current}/{entry.total}]
+                          </span>
+                        )}
+                      {isLast && <span className="animate-blink ml-1">▌</span>}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {/* Compact single-line for template runs (no real research) */}
+            {templateId && researchProgress && (
               <div
                 className="font-mono mt-2 animate-event-in"
                 style={{
@@ -241,13 +302,6 @@ export function AgentStream({
               >
                 <span className="text-soft">researcher ›</span>{" "}
                 {researchProgress.step}
-                {typeof researchProgress.current === "number" &&
-                  typeof researchProgress.total === "number" && (
-                    <span className="text-soft">
-                      {" "}
-                      [{researchProgress.current}/{researchProgress.total}]
-                    </span>
-                  )}
                 <span className="animate-blink ml-1">▌</span>
               </div>
             )}
