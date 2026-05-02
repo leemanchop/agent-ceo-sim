@@ -217,7 +217,11 @@ prompt. No prose, no commentary, no code fence. Just the JSON object.
         run_id=state.run_id,
         agent="oracle",
         model=MODEL_ORACLE,
-        max_tokens=2000,  # event card + 3-5 reactions + 0-2 atmospheric + stat deltas + foreshadow updates
+        # Oracle output is verbose JSON — event card + 3-5 reactions + atmospheric
+        # + stats deltas + foreshadow updates. 2000 was getting truncated mid-JSON
+        # which fell through to the generic "Quiet day on the timeline" fallback.
+        # 3500 fits the full payload with headroom for longer reactions.
+        max_tokens=3500,
         system=_build_system_blocks(),
         messages=[{"role": "user", "content": user_prompt}],
     )
@@ -227,9 +231,21 @@ prompt. No prose, no commentary, no code fence. Just the JSON object.
     )
     parsed = _extract_json(text)
     if parsed is None:
-        # If the Oracle drifted, return a minimal pump-the-brakes fallback so
-        # the run doesn't 500. The Editor will catch and rewrite next turn.
-        parsed = _fallback_event(state)
+        # The Oracle drifted (truncated JSON, malformed structure, etc.).
+        # Log loudly so we can diagnose, then raise — the route's error
+        # handler will trigger an exponential-backoff retry. We deliberately
+        # do NOT silently fall back to a generic event anymore; the user
+        # was seeing "Quiet day on the timeline" three times in a row
+        # because the fallback masked repeated parse failures.
+        truncated = len(text) >= 3400  # ~max_tokens * 0.97
+        print(
+            f"[oracle] turn={state.turn} run={state.run_id} "
+            f"JSON parse failed (len={len(text)}, truncated={truncated})"
+        )
+        print(f"[oracle] last 200 chars of output: {text[-200:]!r}")
+        raise RuntimeError(
+            f"oracle output unparseable (truncated={truncated})"
+        )
     return parsed
 
 
@@ -258,13 +274,23 @@ def _strip_fence(text: str) -> str:
 
 
 def _fallback_event(state: RunState) -> Dict[str, Any]:
+    company = "the company"
+    if state.bible:
+        bible_company = state.bible.get("company") or {}
+        company = (
+            bible_company.get("display_name")
+            or bible_company.get("name")
+            or state.bible.get("display_name")
+            or state.bible.get("name")
+            or "the company"
+        )
     return {
         "event_card": {
             "id": f"EVT-FALLBACK-{state.turn:03d}",
             "category": "PRESS",
             "severity": "S",
             "title": "Quiet day on the timeline",
-            "body": f"At day {state.stats.day}, [COMPANY] is between beats. The chorus is bored. The chorus will not stay bored.",
+            "body": f"At day {state.stats.day}, {company} is between beats. The chorus is bored. The chorus will not stay bored.",
             "tags": ["atmospheric"],
             "choices": [
                 {"id": "A", "label": "Post through it", "tone": "unhinged"},

@@ -221,9 +221,13 @@ def install_routes(api: Any) -> None:  # api: FastAPI
             task = asyncio.create_task(runner())
             try:
                 while True:
-                    if await request.is_disconnected():
-                        state.cancelled = True
-                        break
+                    # NOTE: client-disconnect detection used to live here via
+                    # `request.is_disconnected()`, but that required the
+                    # `request: Request` parameter which FastAPI was
+                    # misinterpreting as a required query field (causing 400s
+                    # before the SSE could open). The Anthropic SDK call has
+                    # its own timeout; if the browser closes the EventSource,
+                    # the next yield will raise and tear the runner down.
                     try:
                         kind, data = await asyncio.wait_for(queue.get(), timeout=30.0)
                     except asyncio.TimeoutError:

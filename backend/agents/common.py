@@ -13,10 +13,16 @@
 #
 # This roughly halves end-to-end per-turn latency vs. all-Sonnet. If voice
 # regresses noticeably, flip CEO back to Sonnet first (most voice-sensitive).
+# Oracle reverted to Sonnet on 2026-05-02: Haiku was producing truncated /
+# malformed JSON intermittently which fell through to the generic
+# "Quiet day on the timeline" fallback 2-3 turns in a row. Sonnet's stricter
+# JSON adherence matters more than the latency saving for the Oracle's
+# verbose structured output. CEO + Editor stay on Haiku — their outputs are
+# simpler and tolerate Haiku's looser JSON discipline.
 MODEL_RESEARCHER = "claude-opus-4-7"
 MODEL_POST_MORTEM = "claude-opus-4-7"
 MODEL_CEO = "claude-haiku-4-5"
-MODEL_ORACLE = "claude-haiku-4-5"
+MODEL_ORACLE = "claude-sonnet-4-6"
 MODEL_EDITOR = "claude-haiku-4-5"
 
 
