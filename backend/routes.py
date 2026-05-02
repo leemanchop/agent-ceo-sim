@@ -887,23 +887,41 @@ def _endgame_triggered_by_stats(state) -> bool:
     """Hard endgame triggers. Gated by a minimum-turn threshold so a run can
     never terminate before the user has seen at least 3 decisions resolve —
     runs that flame out on turn 1 are unsatisfying as drama and prevent the
-    user from trying out the prediction loop. The Oracle's stat deltas can
-    push fbi_awareness or fraud_score past the kill thresholds quickly when
-    the early arc is high-severity (Wells notice, demo-fraud reveal, etc.).
+    user from trying out the prediction loop.
+
+    Thresholds are tuned to fire within ~6–15 turns in medium mode given
+    typical Oracle stat deltas (+5..+15 per bad decision). Earlier tuning
+    required fbi_awareness AND fraud_score to BOTH cross 95/85, which in
+    practice meant the run never terminated and the loop just cycled through
+    ambient phases until max_turns. The new triggers are OR-gated and the
+    levels are loosened so most natural runs reach a satisfying endgame.
     """
-    # Minimum decisions before any endgame can fire. micro mode is 5 turns
-    # total so we cap at 3; longer modes can use the same floor without
-    # noticeably constraining the arc.
     MIN_DECISIONS_BEFORE_ENDGAME = 3
     if state.turn < MIN_DECISIONS_BEFORE_ENDGAME:
         return False
 
     s = state.stats
-    if s.fbi_awareness >= 95 and s.fraud_score >= 85:
+    # PRISON path — either heat OR fraud being terminal is enough.
+    if s.fbi_awareness >= 80:
         return True
-    if s.cash <= -5_000_000:
+    if s.fraud_score >= 85:
         return True
-    if s.reputation <= -90:
+    # BANKRUPTCY / FAILURE paths.
+    if s.cash <= -2_000_000:
+        return True
+    if s.reputation <= -75:
+        return True
+    # POSITIVE / CULTURAL exit — runaway success terminates the run too.
+    if s.valuation >= 5_000_000_000:
+        return True
+    # Compound collapse — any two pressure signals at moderate levels.
+    pressure = sum([
+        1 if s.fbi_awareness >= 60 else 0,
+        1 if s.fraud_score >= 60 else 0,
+        1 if s.reputation <= -50 else 0,
+        1 if s.cash <= 0 else 0,
+    ])
+    if pressure >= 2:
         return True
     return False
 
