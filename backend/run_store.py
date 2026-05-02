@@ -154,13 +154,46 @@ def _state_to_blob(state: Any) -> Dict[str, Any]:
     """Serialize RunState minus the bible (which lives in its own column).
 
     Uses dataclass asdict() so nested Stats / ForeshadowTracker / TurnRecord /
-    FeedEntry collapse to plain dicts. asyncio.Queue is dropped on the floor.
+    FeedEntry collapse to plain dicts. asyncio.Queue and the pre-fetched
+    Oracle Task contain Futures that can't be deepcopy'd — we null them out
+    BEFORE asdict() so the deepcopy walk never touches them, then restore
+    afterward so the live run keeps using them.
     """
-    blob = asdict(state)
+    saved: Dict[str, Any] = {}
+    # Standard unserializable dataclass fields (decision_queue).
+    for f in _UNSERIALIZABLE_FIELDS:
+        if hasattr(state, f):
+            saved[f] = getattr(state, f)
+            try:
+                setattr(state, f, None)
+            except Exception:
+                pass
+    # Pre-fetched Oracle task is an instance attr (not a dataclass field) —
+    # asdict doesn't see it, but defensively null it too in case __dict__
+    # walking is involved upstream.
+    pre_task = getattr(state, "_next_oracle_task", None)
+    if pre_task is not None:
+        try:
+            state._next_oracle_task = None  # type: ignore[attr-defined]
+        except Exception:
+            pass
+    try:
+        blob = asdict(state)
+    finally:
+        # Restore everything we nulled.
+        for f, v in saved.items():
+            try:
+                setattr(state, f, v)
+            except Exception:
+                pass
+        if pre_task is not None:
+            try:
+                state._next_oracle_task = pre_task  # type: ignore[attr-defined]
+            except Exception:
+                pass
+    # Defensive: if anything snuck through, drop it from the blob.
     for f in _UNSERIALIZABLE_FIELDS:
         blob.pop(f, None)
-    # Bible is hoisted into its own column for cheaper list-rendering; drop it
-    # from the state blob to avoid double-storage.
     blob.pop("bible", None)
     blob.pop("bible_yaml_raw", None)
     return blob

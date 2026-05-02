@@ -315,6 +315,10 @@ export function useRun({
   const [liveEvent, setLiveEvent] = useState<ActiveEvent | null>(null);
   const liveEventRef = useRef<ActiveEvent | null>(null);
   liveEventRef.current = liveEvent;
+  // Backend-assigned ULID for live mode. Different from the URL slug (which
+  // can be a template id like "theranos"). Set during bootstrap; read by
+  // decide/setSpeed/end calls that hit `/run/{id}/...`.
+  const backendRunIdRef = useRef<string | null>(null);
 
   // Live-stream achievements (real backend triggers — no longer mocked).
   const [achievementsUnlocked, setAchievementsUnlocked] = useState<
@@ -593,6 +597,7 @@ export function useRun({
         });
         if (cancelled) return;
         const ulid = created.run_id;
+        backendRunIdRef.current = ulid;
 
         // Open /start to consume researcher events. When stream.open fires,
         // close it and switch to /stream.
@@ -882,8 +887,9 @@ export function useRun({
         }, 700);
       } else {
         const evId = liveEventRef.current?.id;
-        if (evId) {
-          decideRun(runId, {
+        const backendId = backendRunIdRef.current;
+        if (evId && backendId) {
+          decideRun(backendId, {
             kind: "prediction",
             event_id: evId,
             predicted_choice: id,
@@ -919,8 +925,9 @@ export function useRun({
         setPhase("revealed");
       } else {
         const evId = liveEventRef.current?.id;
-        if (evId) {
-          decideRun(runId, {
+        const backendId = backendRunIdRef.current;
+        if (evId && backendId) {
+          decideRun(backendId, {
             kind: "force_choice",
             event_id: evId,
             choice_id: id,
@@ -939,7 +946,8 @@ export function useRun({
     (s: 1 | 2 | 4) => {
       setSpeedState(s);
       if (!useMock) {
-        apiSetSpeed(runId, (`${s}x` as `${typeof s}x`)).catch((err) => {
+        const backendId = backendRunIdRef.current ?? runId;
+        apiSetSpeed(backendId, (`${s}x` as `${typeof s}x`)).catch((err) => {
           // eslint-disable-next-line no-console
           console.warn("[useRun] setSpeed failed:", err);
         });
