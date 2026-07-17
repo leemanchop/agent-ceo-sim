@@ -21,7 +21,10 @@
 #     max_tokens=3500 + JSON-repair fallback in oracle._extract_json + the
 #     route-level retry-with-backoff cap.
 MODEL_RESEARCHER = "claude-opus-4-7"
-MODEL_POST_MORTEM = "claude-opus-4-7"
+# Post-mortem is the shareable narrative finale — quality matters, but Opus
+# was ~half the cost of an entire run for one call. Sonnet keeps the prose
+# quality while cutting that ~5x (see usage_tracker._PRICING).
+MODEL_POST_MORTEM = "claude-sonnet-4-6"
 MODEL_CEO = "claude-haiku-4-5"
 MODEL_ORACLE = "claude-haiku-4-5"
 MODEL_EDITOR = "claude-haiku-4-5"
