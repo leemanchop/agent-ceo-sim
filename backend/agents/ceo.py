@@ -254,7 +254,9 @@ async def stream_ceo(
         agent="ceo",
         model=MODEL_CEO,
         max_tokens=700,  # CEO output is reasoning + choice + justification + 1 tweet — 700 is plenty
-        system=system,
+        # System prompt is static within a run (bible slot-fills don't change),
+        # so cache it — saves re-processing it on every turn's call.
+        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": user}],
     ) as stream:
         for event in stream:

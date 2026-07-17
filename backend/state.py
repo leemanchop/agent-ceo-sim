@@ -41,6 +41,14 @@ class Stats:
         self.fbi_awareness = max(0, min(100, self.fbi_awareness))
         self.fraud_score = max(0, min(100, self.fraud_score))
         self.reputation = max(-100, min(100, self.reputation))
+        # floor the money / count stats at 0 — a company can't have negative
+        # valuation, cash-on-hand, revenue, burn, or headcount. Bankruptcy is
+        # detected via the cash<=0 endgame trigger, not via cash going negative.
+        self.valuation = max(0, self.valuation)
+        self.cash = max(0, self.cash)
+        self.revenue = max(0, self.revenue)
+        self.burn = max(0, self.burn)
+        self.headcount = max(0, self.headcount)
 
     def snapshot(self) -> Dict[str, int]:
         return {

@@ -125,7 +125,9 @@ Review per the rubric. Output strict JSON. Default ship unless real failure.
         agent="editor",
         model=MODEL_EDITOR,
         max_tokens=300,  # editor returns a small JSON verdict — no need for room
-        system=SYSTEM_PROMPT,
+        # Editor system prompt is a static module constant — cache it so it
+        # isn't re-billed as fresh input tokens every turn.
+        system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": user_prompt}],
     )
     text = "".join(

@@ -448,17 +448,34 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                     state.last_user_decision = None
                     user_pred = None
                     user_force = None
-                    try:
-                        decision = await asyncio.wait_for(
-                            state.decision_queue.get(),
-                            timeout=float(prediction_window),
-                        )
+                    # Wait for the user's prediction / force-choice, but emit
+                    # an SSE keepalive every few seconds so proxies and the
+                    # browser's EventSource don't drop the connection during
+                    # the (up to 30s spectate / 120s interactive) decision
+                    # window. The old code did a single silent wait_for for the
+                    # whole window — up to 30s of dead air after choices.appear,
+                    # which surfaced to users as "the run just stops / returns
+                    # nothing." Timing out the whole window still leaves both
+                    # user_pred and user_force None, exactly as before.
+                    loop = asyncio.get_event_loop()
+                    deadline = loop.time() + float(prediction_window)
+                    while True:
+                        remaining = deadline - loop.time()
+                        if remaining <= 0:
+                            break
+                        try:
+                            decision = await asyncio.wait_for(
+                                state.decision_queue.get(),
+                                timeout=min(5.0, remaining),
+                            )
+                        except asyncio.TimeoutError:
+                            yield ": ping\n\n"
+                            continue
                         if decision.get("kind") == "prediction":
                             user_pred = decision.get("predicted_choice")
                         elif decision.get("kind") == "force_choice":
                             user_force = decision.get("choice_id")
-                    except asyncio.TimeoutError:
-                        pass
+                        break
 
                     chosen_id = user_force or ceo_out.get("choice_id")
                     artifacts = ceo_out.get("artifacts", {}) or {}
@@ -907,7 +924,8 @@ def _endgame_triggered_by_stats(state) -> bool:
     if s.fraud_score >= 85:
         return True
     # BANKRUPTCY / FAILURE paths.
-    if s.cash <= -2_000_000:
+    # Cash is now floored at 0 in Stats.apply, so "out of runway" == cash hits 0.
+    if s.cash <= 0:
         return True
     if s.reputation <= -75:
         return True

@@ -25,10 +25,11 @@ tracker) go into a separate UNCACHED block. This is the load-bearing optimizatio
 from __future__ import annotations
 
 import json
+import random
 import re
 from typing import Any, Dict, List, Optional
 
-from corpus_loader import get_corpus, render_corpus_for_prompt  # type: ignore
+from corpus_loader import get_corpus, render_corpus_for_prompt, filter_events  # type: ignore
 from state import RunState  # type: ignore
 import usage_tracker  # type: ignore
 
@@ -310,6 +311,49 @@ def _last_turns_summary(state: RunState, k: int = 3) -> str:
     return "\n".join(out)
 
 
+def _candidate_shortlist(state: RunState, *, size: int = 16) -> str:
+    """Build a per-run-varied shortlist of candidate events for the Oracle.
+
+    Root cause of "every run feels the same": the Oracle is handed the entire
+    corpus in the same fixed order every turn of every run, and (Anthropic's
+    default temperature already being 1.0) identical inputs gravitate to the
+    same salient events. We can't add sampling headroom, so we vary the INPUT:
+    run the cheap `filter_events` pre-filter, drop events already used in recent
+    turns, then seed-shuffle by (run_id, turn) so each run surfaces a different
+    slice. This goes in the UNCACHED user prompt, so the big cached corpus block
+    is untouched and per-turn cost does not regress.
+
+    Returns a markdown bullet list, or a graceful fallback line on any error.
+    """
+    try:
+        corpus = get_corpus()
+        company = (state.bible or {}).get("company", {}) or {}
+        industry = company.get("industry")
+        recent_ids = [t.event_id for t in state.turns[-8:]]
+        pool = filter_events(
+            corpus,
+            length_mode=state.length_mode(),
+            craziness=state.craziness(),
+            severity_floor=state.severity_floor(),
+            industry=industry,
+            exclude_ids=recent_ids,
+        )
+        if not pool:
+            return "(no shortlist — select from the full corpus above)"
+        # Stable per-(run, turn) seed: same run+turn reproduces, different runs
+        # diverge. random.Random accepts a string seed directly.
+        rng = random.Random(f"{state.run_id}:{state.turn}")
+        rng.shuffle(pool)
+        shortlist = pool[:size]
+        return "\n".join(
+            f"- {ev.record_id} — {ev.title} (severity {ev.severity or '?'})"
+            for ev in shortlist
+        )
+    except Exception as exc:  # noqa: BLE001 — never let shortlisting break a turn
+        print(f"[oracle] candidate shortlist failed ({type(exc).__name__}: {exc})")
+        return "(no shortlist — select from the full corpus above)"
+
+
 def run_oracle(
     *,
     state: RunState,
@@ -318,6 +362,7 @@ def run_oracle(
     """Run the Oracle for one turn. Synchronous — Modal calls this in a
     function-call boundary so we can return a single JSON dict."""
     bible_yaml = state.bible_yaml_raw or json.dumps(state.bible or {}, indent=2)
+    candidate_section = _candidate_shortlist(state)
     user_prompt = f"""\
 === COMPANY BIBLE (this run) ===
 {bible_yaml}
@@ -328,6 +373,9 @@ length_mode: {state.length_mode()}
 craziness: {state.craziness()}
 severity_floor: {state.severity_floor()}
 stats: {json.dumps(state.stats.snapshot())}
+
+=== PRIORITY CANDIDATE EVENTS (sampled fresh for THIS run — prefer these; do not reuse recent events) ===
+{candidate_section}
 
 === FORESHADOW TRACKER (private — never expose to CEO) ===
 {state.tracker.to_prompt_block()}
