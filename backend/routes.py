@@ -21,6 +21,8 @@ from __future__ import annotations
 import asyncio
 import json
 import queue as thread_queue
+import random
+import re
 import traceback
 import uuid
 from datetime import datetime, timezone
@@ -398,10 +400,10 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                         # Deterministic slot-resolve pass (UX-1): catch any
                         # [FOUNDER]/[COMPANY]/… token the Oracle forgot.
                         slots = _slot_map(state)
-                        event_card["title"] = _resolve_slots(event_card.get("title"), slots)
-                        event_card["body"] = _resolve_slots(event_card.get("body"), slots)
+                        event_card["title"] = _resolve_slots(event_card.get("title"), slots, state.run_id)
+                        event_card["body"] = _resolve_slots(event_card.get("body"), slots, state.run_id)
                         for c in event_card["choices"]:
-                            c["label"] = _resolve_slots(c.get("label"), slots)
+                            c["label"] = _resolve_slots(c.get("label"), slots, state.run_id)
 
                         yield sse("turn.start", {
                             "turn": state.turn,
@@ -422,14 +424,15 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                                 continue  # model emitted a bare string beat
                             yield sse("turn.mini", {
                                 "kind": atm.get("kind", "atmospheric"),
-                                "headline": _resolve_slots(atm.get("headline", ""), slots),
+                                "headline": _resolve_slots(atm.get("headline", ""), slots, state.run_id),
                                 "stat_deltas": atm.get("stat_deltas", {}),
                             })
                         reactions = oracle_out.get("reactions") or []
                         for r in (reactions if isinstance(reactions, list) else []):
                             if not isinstance(r, dict):
                                 continue  # model emitted "@handle: text" strings
-                            r["body"] = _resolve_slots(r.get("body"), slots)
+                            r["body"] = _resolve_slots(r.get("body"), slots, state.run_id)
+                            r["name"] = _resolve_slots(r.get("name"), slots, state.run_id)
                             yield sse(_feed_event_kind(r), _feed_payload(r))
 
                         # ---- 2) CEO streams hidden reasoning ----
@@ -714,6 +717,10 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                             finding = _maybe_unseal_finding(state)
                             if finding is not None:
                                 state.findings.append(finding["finding_id"])
+                                for fk in ("headline", "canon_text_short", "canon_text_long"):
+                                    finding[fk] = _resolve_slots(
+                                        finding.get(fk), slots, state.run_id
+                                    )
                                 yield sse("finding.unsealed", finding)
 
                         # ---- 7) Stat-based endgame check after consequences ----
@@ -858,16 +865,88 @@ def _slot_map(state) -> Dict[str, str]:
     return out
 
 
-def _resolve_slots(text: Any, slots: Dict[str, str]) -> Any:
-    """Replace [FOUNDER]-style tokens (any casing) the Oracle forgot to fill.
+# Fictional cast pools for slots the bible can't answer and the Oracle
+# forgot to cast (UX-6: "just make some crap up"). All invented people —
+# real names never enter via this path (defamation policy). Keyed by slot
+# prefix; picks are seeded per (run, slot) so a cast member stays the same
+# person for the whole run (personalization.md determinism rule).
+_SLOT_POOLS: Dict[str, List[str]] = {
+    "FOUNDER": ["Jordan Vance", "Alex Marsh", "Casey Nolan"],
+    "COMPANY": ["the company"],
+    "CTO": ["Dev Patel", "Marcus Liang", "Sofia Reyes", "Ethan Brandt"],
+    "CFO": ["Gregory Foss", "Anita Kapoor", "Daniel Osei", "Lauren Whitmore"],
+    "CRO": ["Trent Malloy", "Jessica Duan"],
+    "CHIEF_OF_STAFF": ["Madison Clark", "Oliver Chen", "Grace Adeyemi"],
+    "INTERN": ["Kyle", "Ananya", "Jordan the intern", "Tyler", "Maddie"],
+    "TIER1_VC_PARTNER": [
+        "Blake Harmon of Ridgeline Capital", "Priya Anand of Sequency",
+        "Cameron Voss of Apex Growth", "Dana Kim of Northwind Ventures",
+    ],
+    "VC": ["Blake Harmon of Ridgeline Capital", "Dana Kim of Northwind Ventures"],
+    "JOURNALIST": ["Maya Lindqvist", "Tom Okafor", "Rachel Mendes", "Aaron Silber"],
+    "REPORTER": ["Maya Lindqvist", "Tom Okafor", "Rachel Mendes"],
+    "LAWYER": ["Katherine Boyd of Crawford & Hale", "Sam Delgado", "Victor Nguyen"],
+    "PEER_FOUNDER": ["Jonah Reiss", "Emily Tao", "Arjun Mehta", "big mike from the group chat"],
+    "PARODY_ACCOUNT": ["@litcapital", "@AnonVCs", "@founderhustleculture", "@VCBrags"],
+    "CHORUS": ["@litcapital", "@AnonVCs", "@AGIEnjoyer", "@founderhustleculture"],
+    "SUBSTACK_HANDLE": ["@rotineconomy", "@thedilutionreport"],
+    "REGULATOR": ["the SEC", "FinCEN", "the FTC"],
+    "AUSA": ["AUSA Rachel Kim", "AUSA David Moreno", "AUSA Sarah Bloomfield"],
+    "AGENT": ["Special Agent Dana Whitfield", "Special Agent Marcus Cole"],
+    "BANK_NAME_DODGY": [
+        "Silverline Private Bank", "Banco del Sol (Vanuatu)", "Crestway Trust (Cyprus)",
+    ],
+    "BANK": ["First Meridian Bank", "Coastal Trust", "Heritage National"],
+    "AUDITOR": ["Hollis & Grant", "Whitfield Perry LLP", "Marlowe & Associates"],
+    "COMPETITOR": ["Parallax AI", "Vantage Systems", "Kestrel Labs", "NimbusStack"],
+    "MODEL_NAME": ["GPT-4o", "Claude", "an open-weights Llama"],
+    "PRODUCT_NOUN": ["platform"],
+    "COMPARABLE_FRAUD": ["Theranos", "FTX", "Enron"],
+    "SENATOR": ["Senator Ted Krug (parody)", "Senator Maria Vale (parody)"],
+    "POLITICIAN": ["Governor Rick Stone", "Mayor Douglas Pratt"],
+    "BHARARA_PARODY": ["@SDNYenjoyer (parody)"],
+    "TECH_ELDER": ["Ray Holloway, 40-year Valley veteran"],
+}
+
+_SLOT_TOKEN_RE = re.compile(r"\[([A-Z][A-Z0-9_]{2,})\]")
+
+
+def _invent_slot_value(token: str, run_id: str) -> str:
+    """Deterministic fictional value for an unresolved slot token.
+
+    Longest-prefix match into _SLOT_POOLS (so PEER_FOUNDER_FINTECH hits the
+    PEER_FOUNDER pool); seeded by (run_id, token) so the same slot resolves
+    to the same invented figure for the entire run. Unknown slots humanize
+    to lowercase prose ("[SHADOW_BOARD]" -> "the shadow board") — awkward
+    beats a raw bracket on screen."""
+    key = token
+    while key and key not in _SLOT_POOLS:
+        if "_" not in key:
+            key = ""
+            break
+        key = key.rsplit("_", 1)[0]
+    if key:
+        pool = _SLOT_POOLS[key]
+        return random.Random(f"{run_id}:{token}").choice(pool)
+    return "the " + token.replace("_", " ").lower()
+
+
+def _resolve_slots(text: Any, slots: Dict[str, str], run_id: str = "") -> Any:
+    """Replace [FOUNDER]-style tokens the Oracle forgot to fill: first from
+    the bible map, then (when run_id given) by inventing a deterministic
+    fictional stand-in — no bracket token may survive to the screen.
     Non-strings pass through untouched."""
-    if not isinstance(text, str) or "[" not in text or not slots:
+    if not isinstance(text, str) or "[" not in text:
         return text
-    for key, val in slots.items():
+    for key, val in (slots or {}).items():
         for variant in (key.upper(), key.capitalize(), key.lower()):
             token = f"[{variant}]"
             if token in text:
                 text = text.replace(token, val)
+    if run_id and "[" in text:
+        text = _SLOT_TOKEN_RE.sub(
+            lambda m: _invent_slot_value(m.group(1), run_id), text
+        )
     return text
 
 

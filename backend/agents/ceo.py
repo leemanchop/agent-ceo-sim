@@ -113,8 +113,10 @@ def _build_system(bible: Dict[str, Any]) -> str:
     primary = founders[0] if founders else {}
     industry = company.get("industry", "ai_app")
     stage = company.get("funding_stage", "seed")
-    founder_name = primary.get("name", "[Founder]")
-    company_name = company.get("display_name") or company.get("name", "[Company]")
+    # Never default to bracket placeholders — they read as bugs when they
+    # leak into generated text (UX-6).
+    founder_name = primary.get("name") or "The Founder"
+    company_name = company.get("display_name") or company.get("name") or "the company"
     base = SYSTEM_PROMPT_TEMPLATE
     base = base.replace("[FOUNDER]", founder_name)
     base = base.replace("[COMPANY]", company_name)

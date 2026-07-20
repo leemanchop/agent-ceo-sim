@@ -109,3 +109,25 @@ Reported by Nathan playing real-LLM runs locally (2026-07-20).
   post-mortem screen, which corrects the displayed company.
 - Severity: high
 - Status: fixed (430ee15) — pending live re-test
+
+## UX-6 — Placeholder names still leak here and there
+
+> "still some small bugs here and there, mostly around leaving names as
+> their placeholder value. just make some crap up if needed"
+
+- Diagnosis: the UX-1 resolver only covered bible-backed slots
+  ([FOUNDER]/[COMPANY]/[CTO]/[INDUSTRY]/[PRODUCT_NOUN]). The corpus
+  carries ~35 more casting-decision slots ([TIER1_VC_PARTNER],
+  [JOURNALIST_TECH], [CFO], [LAWYER], [INTERN_NAME], [AUSA_NAME], …)
+  that the Oracle LLM is supposed to cast and sometimes forgets. Secret
+  findings also emitted raw corpus markdown unresolved.
+- Fix: invention layer — curated fictional pools for every common slot
+  (all invented people, defamation-safe), seeded per (run, slot) so a
+  cast member stays the same person all run; longest-prefix matching
+  (PEER_FOUNDER_FINTECH → PEER_FOUNDER pool); unknown slots humanize to
+  lowercase prose. Applied to event cards, choices, atmospherics,
+  reactions, and secret findings. CEO prompt defaults de-bracketed.
+  Verified: all 677 corpus records sweep clean — zero bracket tokens
+  survive resolution.
+- Severity: high
+- Status: fixed — pending live re-test
