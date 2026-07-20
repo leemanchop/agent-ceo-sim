@@ -101,6 +101,7 @@ function TimelineRow({
                   padding: "0 5px",
                   borderWidth: 1,
                   letterSpacing: "0.06em",
+                  fontFamily: "var(--font-body)",
                 }}
               >
                 {entry.timeframe}
@@ -114,6 +115,7 @@ function TimelineRow({
                   padding: "0 5px",
                   borderWidth: 1,
                   letterSpacing: "0.06em",
+                  fontFamily: "var(--font-body)",
                 }}
               >
                 {entry.severity}
@@ -126,6 +128,7 @@ function TimelineRow({
                 padding: "0 5px",
                 borderWidth: 1,
                 letterSpacing: "0.06em",
+                fontFamily: "var(--font-body)",
               }}
             >
               {entry.category}
