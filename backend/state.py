@@ -21,6 +21,32 @@ def new_run_id() -> str:
     return f"01H{uuid.uuid4().hex[:23].upper()}"
 
 
+def _coerce_delta(v: Any) -> Optional[int]:
+    """Best-effort int coercion for LLM-authored stat deltas.
+
+    The Oracle's tool schema types these as integers, but Anthropic does not
+    validate tool input server-side (no strict mode), so real runs see values
+    like "+250000", "-1,200,000", "1_000_000", "−250000" (unicode minus),
+    "-250000.0", or null. Coerce what's unambiguous; return None for junk
+    ("+2M", "15%", dicts, bools, nulls) so the caller can drop the key —
+    a junk delta must never raise (int(v) here used to kill the whole run
+    via the stream loop's outer except).
+    """
+    if isinstance(v, bool) or v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return int(v)
+    if isinstance(v, str):
+        s = v.strip().replace(",", "").replace("_", "").replace("−", "-")
+        if s.startswith("+"):
+            s = s[1:]
+        try:
+            return int(float(s))
+        except (ValueError, OverflowError):
+            return None
+    return None
+
+
 @dataclass
 class Stats:
     valuation: int = 14_000_000
@@ -33,10 +59,24 @@ class Stats:
     reputation: int = 12
     day: int = 14
 
-    def apply(self, deltas: Dict[str, int]) -> None:
-        for k, v in (deltas or {}).items():
-            if hasattr(self, k):
-                setattr(self, k, getattr(self, k) + int(v))
+    def apply(self, deltas: Any) -> None:
+        # Tolerate the common LLM re-normalization of a delta map into a
+        # list of {stat, delta} objects before iterating.
+        if isinstance(deltas, list):
+            merged: Dict[str, Any] = {}
+            for item in deltas:
+                if isinstance(item, dict):
+                    k = item.get("stat") or item.get("key") or item.get("name")
+                    if isinstance(k, str):
+                        merged[k] = item.get("delta", item.get("value"))
+            deltas = merged
+        if not isinstance(deltas, dict):
+            return
+        for k, v in deltas.items():
+            iv = _coerce_delta(v)
+            if iv is None or not isinstance(k, str) or not hasattr(self, k):
+                continue
+            setattr(self, k, getattr(self, k) + iv)
         # clamp the bounded ones
         self.fbi_awareness = max(0, min(100, self.fbi_awareness))
         self.fraud_score = max(0, min(100, self.fraud_score))
@@ -83,7 +123,9 @@ class ForeshadowTracker:
     seeds: Dict[str, Seed] = field(default_factory=dict)
     narrative_debt: int = 0
 
-    def plant(self, seed_id: str, current_turn: int, window: int = 8) -> Seed:
+    def plant(self, seed_id: str, current_turn: int, window: int = 8) -> Optional[Seed]:
+        if not isinstance(seed_id, str):  # LLM-authored; dicts are unhashable
+            return None
         if seed_id in self.seeds and self.seeds[seed_id].status in ("active",):
             return self.seeds[seed_id]
         s = Seed(
@@ -96,12 +138,12 @@ class ForeshadowTracker:
         return s
 
     def pay_off(self, seed_id: str, current_turn: int, lite: bool = False) -> None:
-        if seed_id in self.seeds:
+        if isinstance(seed_id, str) and seed_id in self.seeds:
             self.seeds[seed_id].status = "paid_lite" if lite else "paid"
             self.seeds[seed_id].last_referenced_turn = current_turn
 
     def reroll(self, seed_id: str) -> None:
-        if seed_id in self.seeds:
+        if isinstance(seed_id, str) and seed_id in self.seeds:
             self.seeds[seed_id].status = "rerolled"
 
     def active(self) -> List[Seed]:

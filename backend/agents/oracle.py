@@ -151,10 +151,13 @@ Use snake_case seed_ids per game/chaining.md naming patterns
 
 
 # ───────────────────────────────────────────────────────────────────────────
-# Tool-use schema. We force the Oracle to call this single tool, which means
-# the API itself validates the output shape and we never see free-form text.
-# This eliminates the JSON-parsing failure mode entirely — "valid JSON" is
-# now a hard guarantee from the Anthropic API, not a hope from a regex.
+# Tool-use schema. We force the Oracle to call this single tool, which
+# guarantees the response is a parseable JSON object (no free-form text, no
+# code fences). NOTE the limit: Anthropic does NOT validate tool input
+# against this schema server-side (no strict mode), so values can still
+# arrive mistyped — integers as "+2M"/null, arrays-of-strings as arrays of
+# objects, etc. Every consumer of this output must coerce defensively; the
+# uncoerced int() on stats_deltas was killing whole runs silently.
 # ───────────────────────────────────────────────────────────────────────────
 ORACLE_TOOL: Dict[str, Any] = {
     "name": "emit_oracle_turn",
@@ -299,8 +302,11 @@ def _last_turns_summary(state: RunState, k: int = 3) -> str:
     recent = state.turns[-k:]
     out = []
     for t in recent:
-        tweet = (t.artifact_tweet or "")[:140]
-        justification = t.justification or ""
+        # str() belt: pre-fix TurnRecords (rehydrated from disk) may hold a
+        # dict tweet/justification — slicing a dict raises and, worse, does
+        # so on EVERY retry because the poison lives in state.
+        tweet = str(t.artifact_tweet or "")[:140]
+        justification = str(t.justification or "")
         out.append(
             f"Turn {t.turn} | {t.category}/{t.severity} | "
             f"{t.event_title}\n  agent_picked={t.agent_choice_id}"
@@ -412,10 +418,13 @@ Do not write any prose; the tool call is the entire response.
                     return tool_input
         return None
 
-    # Single-shot Haiku via forced tool_use. The API guarantees the tool
-    # input matches our schema — no JSON parsing, no truncation repair.
-    # If the call fails outright (network / 5xx / model refusal) we fall
-    # back to a template-aware deck instead of stalling the run.
+    # Single-shot Haiku via forced tool_use. Forcing the tool guarantees the
+    # response parses as a JSON object — but the API does NOT validate the
+    # values against our schema (no strict mode), so any field can still
+    # arrive mistyped. Downstream consumers coerce; here we only gate on the
+    # card being an object. If the call fails outright (network / 5xx /
+    # model refusal) we fall back to a template-aware deck instead of
+    # stalling the run.
     try:
         parsed = _call_tool(MODEL_ORACLE)
     except Exception as exc:  # noqa: BLE001 — we want broad recovery
@@ -425,7 +434,7 @@ Do not write any prose; the tool call is the entire response.
         )
         return _fallback_event(state)
 
-    if isinstance(parsed, dict) and parsed.get("event_card"):
+    if isinstance(parsed, dict) and isinstance(parsed.get("event_card"), dict):
         return parsed
     print(
         f"[oracle] turn={state.turn} run={state.run_id} "

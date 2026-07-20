@@ -21,9 +21,10 @@ from __future__ import annotations
 import asyncio
 import json
 import queue as thread_queue
+import traceback
 import uuid
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, Dict, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional
 
 
 def install_routes(api: Any) -> None:  # api: FastAPI
@@ -210,6 +211,14 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                 except Exception as e:  # pragma: no cover
                     # In-voice error (no "Internal Server Error" leaks). The
                     # frontend renders this as a fake event in the agent stream.
+                    # Mark the run terminal — it used to stay 'researching'
+                    # forever in the DB, indistinguishable from a live run.
+                    traceback.print_exc()
+                    state.status = "abandoned"
+                    try:
+                        persist_run(state.run_id)
+                    except Exception:
+                        pass
                     await queue.put(("system.error", {
                         "message": "researcher couldn't dig anything up — going dark",
                         "recoverable": True,
@@ -309,369 +318,432 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                             yield chunk
                         return
 
-                    state.turn += 1
-                    last_ceo = _last_ceo_commit_for_oracle(state)
-
-                    # ---- 1) Oracle generates the turn ----
-                    # If we pre-fetched the next Oracle during the previous
-                    # turn's tail (consequences phase), await that task instead
-                    # of calling Oracle fresh. Saves ~5-15s of LLM latency
-                    # between events.
-                    pre = getattr(state, "_next_oracle_task", None)
-                    state._next_oracle_task = None  # type: ignore[attr-defined]
+                    # ---- per-turn isolation ----------------------------
+                    # One bad turn (usually LLM-authored content slipping
+                    # past the coercion layer) must not kill the run. Log
+                    # loudly, show an in-fiction beat, keep going; three
+                    # consecutive crashed turns force a graceful endgame.
                     try:
-                        if pre is not None:
-                            oracle_out = await pre
-                        else:
-                            oracle_out = await asyncio.to_thread(
-                                run_oracle, state=state, last_ceo_commit=last_ceo
-                            )
-                    except Exception as e:  # pragma: no cover
-                        # Log the actual exception so we can diagnose Oracle
-                        # failures (token-budget, rate-limit, JSON parse, etc.)
-                        # — silently swallowing was leaving runs stuck in a
-                        # retry loop for 30+ seconds with no visibility.
-                        import traceback
-                        print(
-                            f"[oracle] turn={state.turn} run={state.run_id} "
-                            f"failed (consecutive={getattr(state, '_oracle_fail_count', 0) + 1}): {e!r}"
-                        )
-                        traceback.print_exc()
-                        # Cap consecutive failures: 3 strikes → endgame.
-                        # Avoids runaway retry loops if the LLM is wedged.
-                        fails = getattr(state, "_oracle_fail_count", 0) + 1
-                        state._oracle_fail_count = fails  # type: ignore[attr-defined]
-                        # Even on persistent LLM failure, never force an endgame
-                        # before the user has seen 3 decisions resolve. Let
-                        # them sit in error-retry hell instead — they can
-                        # always close the tab. Forced-endgame on turn 1 is
-                        # worse UX than a clear "agent disconnected" message
-                        # that the user can give up on themselves.
-                        MIN_DECISIONS = 3
-                        if fails >= 3 and state.turn >= MIN_DECISIONS:
+                        state.turn += 1
+                        last_ceo = _last_ceo_commit_for_oracle(state)
+
+                        # ---- 1) Oracle generates the turn ----
+                        # If we pre-fetched the next Oracle during the previous
+                        # turn's tail (consequences phase), await that task instead
+                        # of calling Oracle fresh. Saves ~5-15s of LLM latency
+                        # between events.
+                        pre = getattr(state, "_next_oracle_task", None)
+                        state._next_oracle_task = None  # type: ignore[attr-defined]
+                        try:
+                            if pre is not None:
+                                oracle_out = await pre
+                            else:
+                                oracle_out = await asyncio.to_thread(
+                                    run_oracle, state=state, last_ceo_commit=last_ceo
+                                )
+                        except Exception as e:  # pragma: no cover
+                            # Log the actual exception so we can diagnose Oracle
+                            # failures (token-budget, rate-limit, JSON parse, etc.)
+                            # — silently swallowing was leaving runs stuck in a
+                            # retry loop for 30+ seconds with no visibility.
+                            # NOTE: no local `import traceback` here — a local
+                            # import makes the name function-local for ALL of
+                            # gen(), so handlers that fire before this line
+                            # would hit UnboundLocalError (found by chaos test).
                             print(
-                                f"[endgame] route=llm_3_strikes turn={state.turn} "
-                                f"run={state.run_id}"
+                                f"[oracle] turn={state.turn} run={state.run_id} "
+                                f"failed (consecutive={getattr(state, '_oracle_fail_count', 0) + 1}): {e!r}"
                             )
+                            traceback.print_exc()
+                            # Cap consecutive failures: 3 strikes → endgame.
+                            # Avoids runaway retry loops if the LLM is wedged.
+                            fails = getattr(state, "_oracle_fail_count", 0) + 1
+                            state._oracle_fail_count = fails  # type: ignore[attr-defined]
+                            # Even on persistent LLM failure, never force an endgame
+                            # before the user has seen 3 decisions resolve. Let
+                            # them sit in error-retry hell instead — they can
+                            # always close the tab. Forced-endgame on turn 1 is
+                            # worse UX than a clear "agent disconnected" message
+                            # that the user can give up on themselves.
+                            MIN_DECISIONS = 3
+                            if fails >= 3 and state.turn >= MIN_DECISIONS:
+                                print(
+                                    f"[endgame] route=llm_3_strikes turn={state.turn} "
+                                    f"run={state.run_id}"
+                                )
+                                yield _system_error_sse(
+                                    "oracle disconnected. forcing endgame.",
+                                )
+                                async for chunk in _emit_endgame(state, sse):
+                                    yield chunk
+                                return
                             yield _system_error_sse(
-                                "oracle disconnected. forcing endgame.",
+                                f"the world stuttered ({fails}/3) — recovering",
+                            )
+                            await asyncio.sleep(2.0 * fails)  # exponential back-off
+                            state.turn -= 1
+                            continue
+                        # Reset the failure counter on any successful turn.
+                        state._oracle_fail_count = 0  # type: ignore[attr-defined]
+                        event_card = oracle_out.get("event_card", {}) or {}
+                        # LLM-authored — tolerate a card emitted as prose/list and
+                        # choices items that aren't objects. (Tool input is NOT
+                        # schema-validated server-side; see agents/oracle.py.)
+                        if not isinstance(event_card, dict):
+                            event_card = {}
+                        event_card["choices"] = [
+                            c for c in (event_card.get("choices") or [])
+                            if isinstance(c, dict)
+                        ]
+
+                        yield sse("turn.start", {
+                            "turn": state.turn,
+                            "day_elapsed": state.stats.day,
+                            "stats": state.stats.snapshot(),
+                        })
+                        yield sse("event.materialize", {
+                            "event_id": event_card.get("id"),
+                            "category": event_card.get("category"),
+                            "title": event_card.get("title"),
+                            "body": event_card.get("body"),
+                            "severity": event_card.get("severity"),
+                            "tags": event_card.get("tags", []),
+                        })
+                        atms = oracle_out.get("atmospheric") or []
+                        for atm in (atms if isinstance(atms, list) else []):
+                            if not isinstance(atm, dict):
+                                continue  # model emitted a bare string beat
+                            yield sse("turn.mini", {
+                                "kind": atm.get("kind", "atmospheric"),
+                                "headline": atm.get("headline", ""),
+                                "stat_deltas": atm.get("stat_deltas", {}),
+                            })
+                        reactions = oracle_out.get("reactions") or []
+                        for r in (reactions if isinstance(reactions, list) else []):
+                            if not isinstance(r, dict):
+                                continue  # model emitted "@handle: text" strings
+                            yield sse(_feed_event_kind(r), _feed_payload(r))
+
+                        # ---- 2) CEO streams hidden reasoning ----
+                        # Per the SSE contract: thought_token (private) → thought_complete →
+                        # choices.appear → deliberation_token (justification, post-commit) →
+                        # agent.commit. The CEO call returns reasoning + commit + artifacts
+                        # in one shot; we emit them in the contract's order.
+                        thought_id = f"thought_{state.turn}"
+                        tok_q: thread_queue.Queue = thread_queue.Queue()
+
+                        ceo_task = asyncio.create_task(asyncio.to_thread(
+                            _run_ceo_sync, state, event_card, tok_q
+                        ))
+
+                        while True:
+                            if ceo_task.done() and tok_q.empty():
+                                break
+                            try:
+                                tok = tok_q.get(timeout=0.5)
+                                if tok is None:
+                                    break
+                                yield sse("agent.thought_token", {
+                                    "token": tok, "stream_id": thought_id,
+                                })
+                            except thread_queue.Empty:
+                                await asyncio.sleep(0.05)
+                                yield ": ping\n\n"
+                        try:
+                            ceo_out = await ceo_task
+                        except Exception as e:  # pragma: no cover
+                            print(
+                                f"[ceo] turn={state.turn} run={state.run_id} failed: {e!r}"
+                            )
+                            traceback.print_exc()
+                            yield _system_error_sse(
+                                "agent went silent. legal team confiscated phone.",
+                            )
+                            ceo_out = _ceo_fallback(event_card)
+
+                        yield sse("agent.thought_complete", {
+                            "stream_id": thought_id,
+                            "full_text": _as_str(ceo_out.get("reasoning")),
+                        })
+
+                        # choices appear AFTER the private thought, per contract.
+                        prediction_window = 30 if not state.interactive else 120
+                        yield sse("choices.appear", {
+                            "choices": event_card.get("choices", []),
+                            "prediction_window_seconds": prediction_window,
+                        })
+                        deliberation_id = f"deliberation_{state.turn}"
+
+                        # ---- 3) Wait for prediction / force ----
+                        state.ensure_decision_queue()
+                        state.pending_event_id = event_card.get("id")
+                        state.last_user_decision = None
+                        user_pred = None
+                        user_force = None
+                        # Wait for the user's prediction / force-choice, but emit
+                        # an SSE keepalive every few seconds so proxies and the
+                        # browser's EventSource don't drop the connection during
+                        # the (up to 30s spectate / 120s interactive) decision
+                        # window. The old code did a single silent wait_for for the
+                        # whole window — up to 30s of dead air after choices.appear,
+                        # which surfaced to users as "the run just stops / returns
+                        # nothing." Timing out the whole window still leaves both
+                        # user_pred and user_force None, exactly as before.
+                        loop = asyncio.get_event_loop()
+                        deadline = loop.time() + float(prediction_window)
+                        while True:
+                            remaining = deadline - loop.time()
+                            if remaining <= 0:
+                                break
+                            try:
+                                decision = await asyncio.wait_for(
+                                    state.decision_queue.get(),
+                                    timeout=min(5.0, remaining),
+                                )
+                            except asyncio.TimeoutError:
+                                yield ": ping\n\n"
+                                continue
+                            if decision.get("kind") == "prediction":
+                                user_pred = decision.get("predicted_choice")
+                            elif decision.get("kind") == "force_choice":
+                                user_force = decision.get("choice_id")
+                            break
+
+                        chosen_id = user_force or ceo_out.get("choice_id")
+                        # CEO output is free-form JSON (no tool forcing) — tolerate
+                        # artifacts flattened to a string/list, and non-string
+                        # tweets (a dict tweet stored in TurnRecord used to poison
+                        # every later Oracle prompt build via `[:140]` slicing).
+                        artifacts = ceo_out.get("artifacts", {}) or {}
+                        if not isinstance(artifacts, dict):
+                            artifacts = {
+                                "tweet": artifacts if isinstance(artifacts, str) else None,
+                            }
+                        _tw = artifacts.get("tweet")
+                        artifacts["tweet"] = None if _tw is None else _as_str(_tw)
+
+                        # Drip the justification text as deliberation tokens for
+                        # the chip-stream UI before the final commit. Cheap visual
+                        # cadence — no extra LLM call.
+                        #
+                        # Fast-forward: if the user predicted (or force-chose), we
+                        # skip the drip and emit the full justification in one
+                        # chunk, then commit immediately. The user already saw the
+                        # CEO's hidden reasoning during deliberating; once they've
+                        # picked, they want the reveal NOW.
+                        justification = _as_str(ceo_out.get("justification"))
+                        user_acted = user_pred is not None or user_force is not None
+                        if user_acted:
+                            if justification:
+                                yield sse("agent.deliberation_token", {
+                                    "token": justification, "stream_id": deliberation_id,
+                                })
+                        else:
+                            for chunk in _chunk_for_stream(justification):
+                                yield sse("agent.deliberation_token", {
+                                    "token": chunk, "stream_id": deliberation_id,
+                                })
+                                await asyncio.sleep(0.015)
+
+                        yield sse("agent.commit", {
+                            "choice_id": chosen_id,
+                            "justification": justification,
+                            "stream_id": deliberation_id,
+                            "artifact_tweet": artifacts.get("tweet") or "",
+                        })
+
+                        # ---- EARLY PREFETCH: kick off the next Oracle NOW ----
+                        # Was: this lived after consequences.applied. Moving it
+                        # before editor/consequences gives the Oracle ~3-5 extra
+                        # seconds of head-start, hiding more of the LLM latency
+                        # behind the natural reveal animation. By the time the
+                        # user sees the tweet artifact + stat ripples, the next
+                        # Oracle is usually already done.
+                        if (
+                            state.turn + 1 <= state.max_turns()
+                            and getattr(state, "_next_oracle_task", None) is None
+                        ):
+                            early_last_ceo = {
+                                "choice_id": chosen_id,
+                                "justification": justification,
+                                "tweet": artifacts.get("tweet") or "",
+                            }
+                            try:
+                                state._next_oracle_task = asyncio.create_task(  # type: ignore[attr-defined]
+                                    asyncio.to_thread(
+                                        run_oracle,
+                                        state=state,
+                                        last_ceo_commit=early_last_ceo,
+                                    )
+                                )
+                                def _ignore_exc_early(t: Any) -> None:
+                                    try:
+                                        _ = t.exception()
+                                    except Exception:
+                                        pass
+                                state._next_oracle_task.add_done_callback(_ignore_exc_early)  # type: ignore[attr-defined]
+                            except Exception:
+                                state._next_oracle_task = None  # type: ignore[attr-defined]
+
+                        # ---- 4) Editor pass — fire-and-forget ----
+                        # The editor's LLM call (~1-2s) used to block before we
+                        # applied consequences. Move it to a background task so
+                        # the user sees stats ripple immediately after commit.
+                        # The `editor.decision` SSE event still fires when the
+                        # task completes; the frontend treats it as informational.
+                        editor_task = asyncio.create_task(asyncio.to_thread(
+                            editor_review,
+                            bible=state.bible or {},
+                            oracle_output=oracle_out,
+                            ceo_output=ceo_out,
+                            run_id=state.run_id,
+                        ))
+
+                        # ---- 5) Apply consequences ----
+                        deltas = oracle_out.get("stats_deltas", {}) or {}
+                        state.stats.apply(deltas)  # coerces junk values internally
+                        fs = oracle_out.get("foreshadow_updates", {}) or {}
+                        if not isinstance(fs, dict):
+                            fs = {}
+                        win = _window_for(state)
+                        seeds_planted = _seed_id_list(fs.get("plant"))
+                        seeds_paid = _seed_id_list(fs.get("paid_off"))
+                        seeds_paid_lite = _seed_id_list(fs.get("paid_lite"))
+                        for sid in seeds_planted:
+                            state.tracker.plant(sid, state.turn, window=win)
+                        for sid in seeds_paid:
+                            state.tracker.pay_off(sid, state.turn, lite=False)
+                        for sid in seeds_paid_lite:
+                            state.tracker.pay_off(sid, state.turn, lite=True)
+                        for sid in _seed_id_list(fs.get("rerolled")):
+                            state.tracker.reroll(sid)
+                        state.tracker.expire_stale(state.turn)
+
+                        rec = TurnRecord(
+                            turn=state.turn,
+                            day=state.stats.day,
+                            event_id=event_card.get("id", f"EVT-{state.turn:03d}"),
+                            event_title=event_card.get("title", ""),
+                            event_body=event_card.get("body", ""),
+                            severity=event_card.get("severity", "S"),
+                            category=event_card.get("category", "PRESS"),
+                            choices=event_card.get("choices", []),
+                            agent_choice_id=ceo_out.get("choice_id"),
+                            user_prediction=user_pred,
+                            user_force_choice=user_force,
+                            reasoning=_as_str(ceo_out.get("reasoning")),
+                            justification=justification,
+                            artifact_tweet=artifacts.get("tweet") or "",
+                            stat_deltas=deltas if isinstance(deltas, dict) else {},
+                            seeds_planted=seeds_planted,
+                            seeds_paid_off=seeds_paid + seeds_paid_lite,
+                        )
+                        state.turns.append(rec)
+                        if artifacts.get("tweet"):
+                            state.add_feed(FeedEntry(
+                                id=str(uuid.uuid4()),
+                                source="twitter",
+                                handle=_founder_handle(state),
+                                name=_founder_name(state),
+                                body=artifacts["tweet"],
+                                timestamp="now",
+                            ))
+                            # Mirror to SSE so the right rail keeps populating —
+                            # without this the founder's tweets never reach the
+                            # browser even though they're persisted server-side.
+                            yield sse("feed.tweet", {
+                                "handle": _founder_handle(state),
+                                "display_name": _founder_name(state),
+                                "verified": True,
+                                "avatar_seed": _founder_handle(state).lstrip("@"),
+                                "body": artifacts["tweet"],
+                                "reactions": {"likes": 0, "retweets": 0, "quotes": 0},
+                                "ts": _ts_now(),
+                            })
+
+                        yield sse("consequences.applied", {
+                            "stat_deltas": deltas,
+                            "seeds_planted": rec.seeds_planted,
+                            "seeds_paid_off": rec.seeds_paid_off,
+                            "next_event_in_seconds": _gap_for_speed(state.speed),
+                        })
+
+                        # NOTE: pre-fetch was moved to fire IMMEDIATELY after
+                        # agent.commit (above), giving Oracle ~3-5s of extra
+                        # head-start. By the time we get here, the prefetch task
+                        # is already running.
+
+                        # ---- 5b) Editor decision (was kicked off after commit) ----
+                        try:
+                            editor_decision = await editor_task
+                            yield sse("editor.decision", editor_decision)
+                        except Exception:  # pragma: no cover
+                            pass
+
+                        # ---- 5c) Achievement triggers (post-consequences) ----
+                        for ach_evt in _emit_achievements(state):
+                            yield ach_evt
+
+                        # ---- Persist turn outcome (decision row + state blob) ----
+                        # Write-through: append to run_decisions, then mirror the
+                        # cached RunState (with new stats / turn / feed) to disk.
+                        try:
+                            run_store.append_decision(
+                                run_id=state.run_id,
+                                turn=state.turn,
+                                event_id=rec.event_id,
+                                agent_choice=rec.agent_choice_id,
+                                user_pred=rec.user_prediction,
+                                user_commit=rec.user_force_choice,
+                                artifact=rec.artifact_tweet,
+                            )
+                        except Exception:  # pragma: no cover — never block the loop
+                            pass
+                        persist_run(state.run_id)
+
+                        # ---- 6) Mid-run secret findings (turns 3, 7, 12) ----
+                        if state.turn in (3, 7, 12):
+                            finding = _maybe_unseal_finding(state)
+                            if finding is not None:
+                                state.findings.append(finding["finding_id"])
+                                yield sse("finding.unsealed", finding)
+
+                        # ---- 7) Stat-based endgame check after consequences ----
+                        if _endgame_triggered_by_stats(state):
+                            print(
+                                f"[endgame] route=stats_post turn={state.turn} "
+                                f"run={state.run_id} stats={state.stats.snapshot()}"
                             )
                             async for chunk in _emit_endgame(state, sse):
                                 yield chunk
                             return
-                        yield _system_error_sse(
-                            f"the world stuttered ({fails}/3) — recovering",
-                        )
-                        await asyncio.sleep(2.0 * fails)  # exponential back-off
-                        state.turn -= 1
-                        continue
-                    # Reset the failure counter on any successful turn.
-                    state._oracle_fail_count = 0  # type: ignore[attr-defined]
-                    event_card = oracle_out.get("event_card", {}) or {}
 
-                    yield sse("turn.start", {
-                        "turn": state.turn,
-                        "day_elapsed": state.stats.day,
-                        "stats": state.stats.snapshot(),
-                    })
-                    yield sse("event.materialize", {
-                        "event_id": event_card.get("id"),
-                        "category": event_card.get("category"),
-                        "title": event_card.get("title"),
-                        "body": event_card.get("body"),
-                        "severity": event_card.get("severity"),
-                        "tags": event_card.get("tags", []),
-                    })
-                    for atm in oracle_out.get("atmospheric") or []:
-                        yield sse("turn.mini", {
-                            "kind": atm.get("kind", "atmospheric"),
-                            "headline": atm.get("headline", ""),
-                            "stat_deltas": atm.get("stat_deltas", {}),
-                        })
-                    for r in oracle_out.get("reactions") or []:
-                        yield sse(_feed_event_kind(r), _feed_payload(r))
-
-                    # ---- 2) CEO streams hidden reasoning ----
-                    # Per the SSE contract: thought_token (private) → thought_complete →
-                    # choices.appear → deliberation_token (justification, post-commit) →
-                    # agent.commit. The CEO call returns reasoning + commit + artifacts
-                    # in one shot; we emit them in the contract's order.
-                    thought_id = f"thought_{state.turn}"
-                    tok_q: thread_queue.Queue = thread_queue.Queue()
-
-                    ceo_task = asyncio.create_task(asyncio.to_thread(
-                        _run_ceo_sync, state, event_card, tok_q
-                    ))
-
-                    while True:
-                        if ceo_task.done() and tok_q.empty():
-                            break
-                        try:
-                            tok = tok_q.get(timeout=0.5)
-                            if tok is None:
-                                break
-                            yield sse("agent.thought_token", {
-                                "token": tok, "stream_id": thought_id,
-                            })
-                        except thread_queue.Empty:
-                            await asyncio.sleep(0.05)
-                            yield ": ping\n\n"
-                    try:
-                        ceo_out = await ceo_task
-                    except Exception as e:  # pragma: no cover
-                        import traceback
+                        await asyncio.sleep(_gap_for_speed(state.speed))
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        fails = getattr(state, "_turn_fail_count", 0) + 1
+                        state._turn_fail_count = fails  # type: ignore[attr-defined]
                         print(
-                            f"[ceo] turn={state.turn} run={state.run_id} failed: {e!r}"
+                            f"[turn] run={state.run_id} turn={state.turn} "
+                            f"crashed (consecutive={fails}/3):"
                         )
                         traceback.print_exc()
                         yield _system_error_sse(
-                            "agent went silent. legal team confiscated phone.",
+                            "reality glitched — the simulator skips a beat and keeps going"
                         )
-                        ceo_out = _ceo_fallback(event_card)
-
-                    yield sse("agent.thought_complete", {
-                        "stream_id": thought_id,
-                        "full_text": ceo_out.get("reasoning", ""),
-                    })
-
-                    # choices appear AFTER the private thought, per contract.
-                    prediction_window = 30 if not state.interactive else 120
-                    yield sse("choices.appear", {
-                        "choices": event_card.get("choices", []),
-                        "prediction_window_seconds": prediction_window,
-                    })
-                    deliberation_id = f"deliberation_{state.turn}"
-
-                    # ---- 3) Wait for prediction / force ----
-                    state.ensure_decision_queue()
-                    state.pending_event_id = event_card.get("id")
-                    state.last_user_decision = None
-                    user_pred = None
-                    user_force = None
-                    # Wait for the user's prediction / force-choice, but emit
-                    # an SSE keepalive every few seconds so proxies and the
-                    # browser's EventSource don't drop the connection during
-                    # the (up to 30s spectate / 120s interactive) decision
-                    # window. The old code did a single silent wait_for for the
-                    # whole window — up to 30s of dead air after choices.appear,
-                    # which surfaced to users as "the run just stops / returns
-                    # nothing." Timing out the whole window still leaves both
-                    # user_pred and user_force None, exactly as before.
-                    loop = asyncio.get_event_loop()
-                    deadline = loop.time() + float(prediction_window)
-                    while True:
-                        remaining = deadline - loop.time()
-                        if remaining <= 0:
-                            break
-                        try:
-                            decision = await asyncio.wait_for(
-                                state.decision_queue.get(),
-                                timeout=min(5.0, remaining),
+                        if fails >= 3:
+                            print(
+                                f"[turn] run={state.run_id} three consecutive "
+                                f"turn crashes — forcing endgame"
                             )
-                        except asyncio.TimeoutError:
-                            yield ": ping\n\n"
-                            continue
-                        if decision.get("kind") == "prediction":
-                            user_pred = decision.get("predicted_choice")
-                        elif decision.get("kind") == "force_choice":
-                            user_force = decision.get("choice_id")
-                        break
-
-                    chosen_id = user_force or ceo_out.get("choice_id")
-                    artifacts = ceo_out.get("artifacts", {}) or {}
-
-                    # Drip the justification text as deliberation tokens for
-                    # the chip-stream UI before the final commit. Cheap visual
-                    # cadence — no extra LLM call.
-                    #
-                    # Fast-forward: if the user predicted (or force-chose), we
-                    # skip the drip and emit the full justification in one
-                    # chunk, then commit immediately. The user already saw the
-                    # CEO's hidden reasoning during deliberating; once they've
-                    # picked, they want the reveal NOW.
-                    justification = ceo_out.get("justification", "") or ""
-                    user_acted = user_pred is not None or user_force is not None
-                    if user_acted:
-                        if justification:
-                            yield sse("agent.deliberation_token", {
-                                "token": justification, "stream_id": deliberation_id,
-                            })
+                            async for chunk in _emit_endgame(state, sse):
+                                yield chunk
+                            return
+                        await asyncio.sleep(1.0)
+                        continue
                     else:
-                        for chunk in _chunk_for_stream(justification):
-                            yield sse("agent.deliberation_token", {
-                                "token": chunk, "stream_id": deliberation_id,
-                            })
-                            await asyncio.sleep(0.015)
-
-                    yield sse("agent.commit", {
-                        "choice_id": chosen_id,
-                        "justification": justification,
-                        "stream_id": deliberation_id,
-                        "artifact_tweet": artifacts.get("tweet", ""),
-                    })
-
-                    # ---- EARLY PREFETCH: kick off the next Oracle NOW ----
-                    # Was: this lived after consequences.applied. Moving it
-                    # before editor/consequences gives the Oracle ~3-5 extra
-                    # seconds of head-start, hiding more of the LLM latency
-                    # behind the natural reveal animation. By the time the
-                    # user sees the tweet artifact + stat ripples, the next
-                    # Oracle is usually already done.
-                    if (
-                        state.turn + 1 <= state.max_turns()
-                        and getattr(state, "_next_oracle_task", None) is None
-                    ):
-                        early_last_ceo = {
-                            "choice_id": chosen_id,
-                            "justification": justification,
-                            "tweet": artifacts.get("tweet", ""),
-                        }
-                        try:
-                            state._next_oracle_task = asyncio.create_task(  # type: ignore[attr-defined]
-                                asyncio.to_thread(
-                                    run_oracle,
-                                    state=state,
-                                    last_ceo_commit=early_last_ceo,
-                                )
-                            )
-                            def _ignore_exc_early(t: Any) -> None:
-                                try:
-                                    _ = t.exception()
-                                except Exception:
-                                    pass
-                            state._next_oracle_task.add_done_callback(_ignore_exc_early)  # type: ignore[attr-defined]
-                        except Exception:
-                            state._next_oracle_task = None  # type: ignore[attr-defined]
-
-                    # ---- 4) Editor pass — fire-and-forget ----
-                    # The editor's LLM call (~1-2s) used to block before we
-                    # applied consequences. Move it to a background task so
-                    # the user sees stats ripple immediately after commit.
-                    # The `editor.decision` SSE event still fires when the
-                    # task completes; the frontend treats it as informational.
-                    editor_task = asyncio.create_task(asyncio.to_thread(
-                        editor_review,
-                        bible=state.bible or {},
-                        oracle_output=oracle_out,
-                        ceo_output=ceo_out,
-                        run_id=state.run_id,
-                    ))
-
-                    # ---- 5) Apply consequences ----
-                    deltas = oracle_out.get("stats_deltas", {}) or {}
-                    state.stats.apply(deltas)
-                    fs = oracle_out.get("foreshadow_updates", {}) or {}
-                    win = _window_for(state)
-                    for sid in fs.get("plant", []) or []:
-                        state.tracker.plant(sid, state.turn, window=win)
-                    for sid in fs.get("paid_off", []) or []:
-                        state.tracker.pay_off(sid, state.turn, lite=False)
-                    for sid in fs.get("paid_lite", []) or []:
-                        state.tracker.pay_off(sid, state.turn, lite=True)
-                    for sid in fs.get("rerolled", []) or []:
-                        state.tracker.reroll(sid)
-                    state.tracker.expire_stale(state.turn)
-
-                    rec = TurnRecord(
-                        turn=state.turn,
-                        day=state.stats.day,
-                        event_id=event_card.get("id", f"EVT-{state.turn:03d}"),
-                        event_title=event_card.get("title", ""),
-                        event_body=event_card.get("body", ""),
-                        severity=event_card.get("severity", "S"),
-                        category=event_card.get("category", "PRESS"),
-                        choices=event_card.get("choices", []),
-                        agent_choice_id=ceo_out.get("choice_id"),
-                        user_prediction=user_pred,
-                        user_force_choice=user_force,
-                        reasoning=ceo_out.get("reasoning", ""),
-                        justification=ceo_out.get("justification", ""),
-                        artifact_tweet=artifacts.get("tweet", ""),
-                        stat_deltas=deltas,
-                        seeds_planted=list(fs.get("plant", []) or []),
-                        seeds_paid_off=list((fs.get("paid_off") or []) + (fs.get("paid_lite") or [])),
-                    )
-                    state.turns.append(rec)
-                    if artifacts.get("tweet"):
-                        state.add_feed(FeedEntry(
-                            id=str(uuid.uuid4()),
-                            source="twitter",
-                            handle=_founder_handle(state),
-                            name=_founder_name(state),
-                            body=artifacts["tweet"],
-                            timestamp="now",
-                        ))
-                        # Mirror to SSE so the right rail keeps populating —
-                        # without this the founder's tweets never reach the
-                        # browser even though they're persisted server-side.
-                        yield sse("feed.tweet", {
-                            "handle": _founder_handle(state),
-                            "display_name": _founder_name(state),
-                            "verified": True,
-                            "avatar_seed": _founder_handle(state).lstrip("@"),
-                            "body": artifacts["tweet"],
-                            "reactions": {"likes": 0, "retweets": 0, "quotes": 0},
-                            "ts": _ts_now(),
-                        })
-
-                    yield sse("consequences.applied", {
-                        "stat_deltas": deltas,
-                        "seeds_planted": rec.seeds_planted,
-                        "seeds_paid_off": rec.seeds_paid_off,
-                        "next_event_in_seconds": _gap_for_speed(state.speed),
-                    })
-
-                    # NOTE: pre-fetch was moved to fire IMMEDIATELY after
-                    # agent.commit (above), giving Oracle ~3-5s of extra
-                    # head-start. By the time we get here, the prefetch task
-                    # is already running.
-
-                    # ---- 5b) Editor decision (was kicked off after commit) ----
-                    try:
-                        editor_decision = await editor_task
-                        yield sse("editor.decision", editor_decision)
-                    except Exception:  # pragma: no cover
-                        pass
-
-                    # ---- 5c) Achievement triggers (post-consequences) ----
-                    for ach_evt in _emit_achievements(state):
-                        yield ach_evt
-
-                    # ---- Persist turn outcome (decision row + state blob) ----
-                    # Write-through: append to run_decisions, then mirror the
-                    # cached RunState (with new stats / turn / feed) to disk.
-                    try:
-                        run_store.append_decision(
-                            run_id=state.run_id,
-                            turn=state.turn,
-                            event_id=rec.event_id,
-                            agent_choice=rec.agent_choice_id,
-                            user_pred=rec.user_prediction,
-                            user_commit=rec.user_force_choice,
-                            artifact=rec.artifact_tweet,
-                        )
-                    except Exception:  # pragma: no cover — never block the loop
-                        pass
-                    persist_run(state.run_id)
-
-                    # ---- 6) Mid-run secret findings (turns 3, 7, 12) ----
-                    if state.turn in (3, 7, 12):
-                        finding = _maybe_unseal_finding(state)
-                        if finding is not None:
-                            state.findings.append(finding["finding_id"])
-                            yield sse("finding.unsealed", finding)
-
-                    # ---- 7) Stat-based endgame check after consequences ----
-                    if _endgame_triggered_by_stats(state):
-                        print(
-                            f"[endgame] route=stats_post turn={state.turn} "
-                            f"run={state.run_id} stats={state.stats.snapshot()}"
-                        )
-                        async for chunk in _emit_endgame(state, sse):
-                            yield chunk
-                        return
-
-                    await asyncio.sleep(_gap_for_speed(state.speed))
+                        state._turn_fail_count = 0  # type: ignore[attr-defined]
 
                 # ---- Out-of-turns endgame (no stat trigger fired) ----
                 print(
@@ -683,6 +755,17 @@ def install_routes(api: Any) -> None:  # api: FastAPI
             except asyncio.CancelledError:
                 pass
             except Exception:  # pragma: no cover
+                # Last resort — per-turn isolation above should catch turn
+                # crashes first. This path used to swallow the exception
+                # silently (no log line, run stuck at status='streaming'
+                # forever); now it leaves evidence and a terminal status.
+                print(f"[stream] run={state.run_id} turn={state.turn} died:")
+                traceback.print_exc()
+                state.status = "abandoned"
+                try:
+                    persist_run(state.run_id)
+                except Exception:
+                    pass
                 yield _system_error_sse(
                     "the simulator coughed and lost the thread — try /run/{id}/start again",
                 )
@@ -733,6 +816,42 @@ def _last_ceo_commit_for_oracle(state):
     }
 
 
+def _as_str(x: Any) -> str:
+    """Coerce an LLM-authored should-be-string field to a plain string.
+    None -> ""; dicts/lists -> compact JSON; everything else -> str()."""
+    if isinstance(x, str):
+        return x
+    if x is None:
+        return ""
+    try:
+        return json.dumps(x)
+    except Exception:
+        return str(x)
+
+
+def _seed_id_list(x: Any) -> List[str]:
+    """Coerce an LLM-authored foreshadow entry list into plain seed-id strings.
+
+    Tolerates a bare string (one id — NOT iterated per-character), entries
+    wrapped in objects ({"seed_id": ..., "why": ...}), a dict keyed by seed
+    id, and junk (dropped)."""
+    if isinstance(x, str):
+        return [x]
+    if isinstance(x, dict):
+        x = list(x.keys())
+    if not isinstance(x, list):
+        return []
+    out: List[str] = []
+    for item in x:
+        if isinstance(item, str):
+            out.append(item)
+        elif isinstance(item, dict):
+            sid = item.get("seed_id") or item.get("id") or item.get("seed")
+            if isinstance(sid, str):
+                out.append(sid)
+    return out
+
+
 def _founder_handle(state) -> str:
     fs = ((state.bible or {}).get("founders") or [{}])
     return (fs[0].get("twitter_handle") if fs else None) or "@founder"
@@ -744,7 +863,8 @@ def _founder_name(state) -> str:
 
 
 def _feed_event_kind(reaction: Dict[str, Any]) -> str:
-    src = (reaction.get("source") or "twitter").lower()
+    src = reaction.get("source") or "twitter"
+    src = src.lower() if isinstance(src, str) else "twitter"
     return {
         "twitter": "feed.tweet",
         "slack": "feed.slack_leak",
@@ -758,13 +878,14 @@ def _feed_event_kind(reaction: Dict[str, Any]) -> str:
 
 
 def _feed_payload(reaction: Dict[str, Any]) -> Dict[str, Any]:
-    src = (reaction.get("source") or "twitter").lower()
+    src = reaction.get("source") or "twitter"
+    src = src.lower() if isinstance(src, str) else "twitter"
     if src in ("twitter", "discord"):
         return {
             "handle": reaction.get("handle", "@unknown"),
             "display_name": reaction.get("name", "Unknown"),
             "verified": True,
-            "avatar_seed": (reaction.get("handle") or "x").lstrip("@"),
+            "avatar_seed": _as_str(reaction.get("handle") or "x").lstrip("@"),
             "body": reaction.get("body", ""),
             "reactions": {"likes": 0, "retweets": 0, "quotes": 0},
             "ts": _ts_now(),
@@ -879,11 +1000,18 @@ def _system_error_sse(message: str) -> str:
 
 
 def _ceo_fallback(event_card):
-    """Last-ditch CEO output if the agent crashed mid-stream. Keeps the loop alive."""
-    choices = event_card.get("choices") or [{"id": "A"}]
+    """Last-ditch CEO output if the agent crashed mid-stream. Keeps the loop alive.
+
+    Must never raise itself — it runs inside an except handler, where a
+    second fault (e.g. non-dict choices from a malformed Oracle card) used
+    to propagate straight to the stream's outer handler and kill the run."""
+    choices = [
+        c for c in (event_card.get("choices") or []) if isinstance(c, dict)
+    ]
+    cid = (choices[0].get("id") if choices else None) or "A"
     return {
         "reasoning": "thinking — going with the obvious play",
-        "choice_id": choices[0].get("id", "A"),
+        "choice_id": cid,
         "justification": "obvious play",
         "artifacts": {"tweet": "we ship", "slack": None, "board_email": None},
     }
@@ -894,6 +1022,8 @@ def _chunk_for_stream(text: str):
 
     Used to turn the CEO's already-decided justification into a streamy chip
     so the UI's `agent.deliberation_token` channel has motion before commit."""
+    if not isinstance(text, str):
+        text = _as_str(text)
     if not text:
         return []
     parts = text.split(" ")

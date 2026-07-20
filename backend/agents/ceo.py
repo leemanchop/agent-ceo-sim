@@ -154,7 +154,7 @@ def _recap(state: RunState, k: int) -> str:
         return "(this is turn 1)"
     return "\n".join(
         f"T{t.turn} | {t.event_title} | picked={t.agent_choice_id} | "
-        f"\"{t.justification[:80]}\""
+        f"\"{str(t.justification or '')[:80]}\""
         for t in state.turns[-k:]
     )
 
@@ -288,16 +288,24 @@ async def stream_ceo(
                 await asyncio.sleep(0.02)
                 i += 8
     if parsed is None:
-        # Fallback so the run doesn't stall.
-        choices = event_card.get("choices") or [{"id": "A"}]
+        # Fallback so the run doesn't stall. Choices are LLM-authored
+        # (Oracle) — tolerate non-dict items so the fallback itself can't
+        # raise while handling a malformed card.
+        choices = [
+            c for c in (event_card.get("choices") or []) if isinstance(c, dict)
+        ]
         parsed = {
             "reasoning": full_text or "thinking — going with the obvious play",
-            "choice_id": choices[0].get("id", "A"),
+            "choice_id": (choices[0].get("id") if choices else None) or "A",
             "justification": "obvious play",
             "artifacts": {"tweet": "we ship", "slack": None, "board_email": None},
         }
     # Clamp to a real choice if the model hallucinated.
-    valid_ids = {c.get("id") for c in event_card.get("choices") or []}
+    valid_ids = {
+        c.get("id") for c in (event_card.get("choices") or [])
+        if isinstance(c, dict)
+    }
+    valid_ids.discard(None)
     if parsed.get("choice_id") not in valid_ids and valid_ids:
         parsed["choice_id"] = next(iter(valid_ids))
     return parsed
