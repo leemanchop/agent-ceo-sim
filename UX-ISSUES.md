@@ -131,3 +131,37 @@ Reported by Nathan playing real-LLM runs locally (2026-07-20).
   survive resolution.
 - Severity: high
 - Status: fixed — pending live re-test
+
+## UX-7 — Narrator asserts unearned fraud as fact ("autonomous production is entirely fake")
+
+> "i don't want the story to basically insult the company - for instance i'm
+> seeing something now that says 'everything is fake'. we have to remember
+> that we are taking the most ridiculous course of action from what we have
+> NOW - you cannot assume that the company is already fraudulent"
+> (observed on nologo.com run, turn ~4: narrator stated "autonomous
+> production is entirely fake" as world-fact)
+
+- Diagnosis: a game-setup problem, per the reporter. The Oracle had no
+  concept of CANON — nothing told it the company starts as a real,
+  functioning business whose wrongdoing becomes true only via the CEO's
+  committed choices. The offending line was model-INVENTED (not corpus
+  text). Secondary: 144 of 296 events carry `prereqs:` seed-gates that
+  the corpus loader never parsed, so the shortlist could nudge
+  locked escalation events early.
+- Fix:
+  - "Presumption of operating reality" doctrine in the Oracle system
+    prompt + per-turn canon reminder: unearned negativity must arrive as
+    ATTRIBUTED VOICES (a thread claims / an ex-contractor alleges), never
+    narrator fact; fraud-presuming corpus events get reframed as
+    temptations or allegations; preset templates keep pre-seeded guilt.
+  - Editor rubric gains a CANON DISCIPLINE check.
+  - corpus_loader parses prereqs/prereqs_any; the Oracle shortlist
+    excludes events whose seed-gates aren't satisfied by actual play,
+    plus an early-turn severity ceiling (no L/XL on turn 1, no XL before
+    turn 3) for runs without pre-planted seeds.
+  - Verified: clean-run turn-1 shortlist contains zero locked/federal
+    events; planting FBI/SEC seeds unlocks exactly the events they gate
+    (106 -> 108 eligible of 180).
+- Severity: high (storytelling premise + defamation posture for real
+  uploaded companies)
+- Status: fixed — pending live re-test

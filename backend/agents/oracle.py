@@ -73,6 +73,31 @@ When generating media artifacts, SHIFT into the artifact's house style:
 - Board memo: stiff, "Per our last discussion..."
 - Glassdoor: forum-poster register, anonymous, specific
 
+WORLD CANON — THE PRESUMPTION OF OPERATING REALITY (load-bearing; violating
+this breaks the entire game premise):
+
+- At run start, the company is EXACTLY what the bible says: a real,
+  functioning business. Its product works as described. The comedy engine
+  is watching the CEO choose the most ridiculous course of action FROM
+  WHERE THINGS STAND NOW — not discovering that everything was secretly
+  fake all along.
+- Company wrongdoing becomes TRUE only when the CEO actually chooses it
+  (see the run history + foreshadow tracker). Until a fraud was chosen,
+  it did not happen. NEVER state as narrator-fact that the product is
+  fake, the revenue is invented, or the demo is rigged unless the run
+  history shows the CEO making that specific bed.
+- Negative heat before (or beyond) what the CEO has earned must arrive as
+  ATTRIBUTED VOICES, never narrator truth: a rival ACCUSES, a burned
+  ex-contractor CLAIMS, a short-seller thread ALLEGES, a journalist ASKS.
+  ("A thread claims the 'autonomous' pipeline is 40 guys on WeChat" — the
+  world doesn't know if it's true, and neither does the narrator.)
+- When a corpus event presumes internal fraud that hasn't been chosen,
+  REFRAME it as (a) a temptation — someone inside proposes the fraudulent
+  shortcut and the CEO chooses — or (b) an external allegation per above.
+  Do not import the event's guilt as established fact.
+- EXCEPTION: preset templates (Theranos, FTX, …) start with pre-planted
+  seeds — THAT loaded state is canon and may be treated as already true.
+
 PER TURN, YOUR JOB IS:
 
 1) Read the foreshadow tracker (provided each turn). Note seeds in their
@@ -351,6 +376,28 @@ def _candidate_shortlist(state: RunState, *, size: int = 16) -> str:
             industry=industry,
             exclude_ids=recent_ids,
         )
+        # Prereq gating (chaining.md: "The raid is not random. Someone has
+        # to flip first."). An event whose prereq seeds haven't been planted
+        # by actual play must not be nudged into the Oracle's hands — that's
+        # how a legitimate company got accused of wholesale fraud on turn 4.
+        # Seeds count as satisfied once planted, whether or not paid off yet.
+        happened = {
+            sid for sid, s in state.tracker.seeds.items()
+            if s.status in ("active", "paid", "paid_lite")
+        }
+        pool = [
+            ev for ev in pool
+            if all(p in happened for p in (ev.prereqs or []))
+            and (not ev.prereqs_any or any(p in happened for p in ev.prereqs_any))
+        ]
+        # Early-turn severity ceiling: no XL before turn 3, no L on turn 1 —
+        # unless the run STARTED with planted seeds (preset templates), whose
+        # loaded state legitimately supports early heat.
+        if not happened:
+            if state.turn <= 1:
+                pool = [ev for ev in pool if (ev.severity or "S") not in ("L", "XL")]
+            elif state.turn <= 2:
+                pool = [ev for ev in pool if (ev.severity or "S") != "XL"]
         if not pool:
             return "(no shortlist — select from the full corpus above)"
         # Stable per-(run, turn) seed: same run+turn reproduces, different runs
@@ -392,6 +439,11 @@ length_mode: {state.length_mode()}
 craziness: {state.craziness()}
 severity_floor: {state.severity_floor()}
 stats: {json.dumps(state.stats.snapshot())}
+
+=== CANON REMINDER ===
+The company is legitimate except where the run history above shows the CEO
+choosing otherwise. Accusations come from voices; the narrator never asserts
+unearned fraud as fact.
 
 === PRIORITY CANDIDATE EVENTS (sampled fresh for THIS run — prefer these; do not reuse recent events) ===
 {candidate_section}

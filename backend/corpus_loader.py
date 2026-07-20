@@ -41,6 +41,8 @@ class CorpusRecord:
     tags: List[str] = field(default_factory=list)
     severity: Optional[str] = None
     length_eligibility: List[str] = field(default_factory=list)
+    prereqs: List[str] = field(default_factory=list)       # ALL must be active
+    prereqs_any: List[str] = field(default_factory=list)   # at least ONE active
 
 
 @dataclass
@@ -78,6 +80,8 @@ _HEADER_RE = re.compile(
 _TAGS_RE = re.compile(r"^\s*-\s*tags:\s*\[(?P<tags>[^\]]*)\]", re.MULTILINE)
 _SEVERITY_RE = re.compile(r"^\s*-\s*severity:\s*(?P<sev>[SMLX]+)", re.MULTILINE)
 _LEN_ELIG_RE = re.compile(r"^\s*-\s*length_eligibility:\s*\[(?P<le>[^\]]*)\]", re.MULTILINE)
+_PREREQS_RE = re.compile(r"^\s*-\s*prereqs:\s*\[(?P<p>[^\]]*)\]", re.MULTILINE)
+_PREREQS_ANY_RE = re.compile(r"^\s*-\s*prereqs_any:\s*\[(?P<p>[^\]]*)\]", re.MULTILINE)
 
 
 def _split_records(text: str, source_file: str) -> List[CorpusRecord]:
@@ -114,6 +118,12 @@ def _split_records(text: str, source_file: str) -> List[CorpusRecord]:
             rec.length_eligibility = [
                 t.strip().strip(",") for t in lm.group("le").split(",") if t.strip()
             ]
+        pm = _PREREQS_RE.search(body)
+        if pm:
+            rec.prereqs = [t.strip().strip(",") for t in pm.group("p").split(",") if t.strip()]
+        pam = _PREREQS_ANY_RE.search(body)
+        if pam:
+            rec.prereqs_any = [t.strip().strip(",") for t in pam.group("p").split(",") if t.strip()]
         records.append(rec)
     return records
 
