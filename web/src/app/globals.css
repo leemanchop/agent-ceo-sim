@@ -32,7 +32,11 @@
   --x-gold: #f5b900;
 
   --font-body: var(--font-special-elite), 'Courier Prime', 'Courier New', monospace;
-  --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace;
+  /* Owner preference (UX-4): one face everywhere — the mono variable now
+     resolves to the body/typewriter stack, so every .pill/.tag/font-mono
+     in the app renders Special Elite. To restore the terminal look, set
+     back to: var(--font-jetbrains-mono), ui-monospace, monospace */
+  --font-mono: var(--font-body);
   --font-x: 'Helvetica Neue', 'Helvetica', 'Segoe UI', system-ui, sans-serif;
 
   color-scheme: dark;
