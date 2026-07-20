@@ -66,9 +66,12 @@ class WorldCorpus:
 
 
 # Header pattern — matches `## EVT-FR-002 — "Tiger's six-hour term sheet"`
+# and `### FIG-VC-001 — ...` (figures/findings/sources files use h3 headings;
+# the old `##`-only pattern silently parsed cast.md, secret_findings.md, and
+# sources/systems.md to ZERO records — the Oracle never saw the cast).
 # Also handles unicode em-dash and hyphen variants.
 _HEADER_RE = re.compile(
-    r"^##\s+(?P<id>(EVT|FIG|END|SF|SRC)-[A-Z0-9_]+-[A-Z0-9_]+)\s*[—\-–]\s*(?P<title>.+?)\s*$",
+    r"^#{2,3}\s+(?P<id>(EVT|FIG|END|SF|SRC)-[A-Z0-9_]+-[A-Z0-9_]+)\s*[—\-–]\s*(?P<title>.+?)\s*$",
     re.MULTILINE,
 )
 
@@ -228,15 +231,15 @@ def render_corpus_for_prompt(corpus: WorldCorpus, *, max_chars: int = 180_000) -
     """Render the full corpus as a single string suitable for prompt-caching.
     The Oracle reads this once; ephemeral cache_control on the surrounding
     system block makes it nearly free per turn."""
+    # ORDER MATTERS: the tail gets truncated at max_chars. Figures (the cameo
+    # cast + chorus handles) and endgames are small and load-bearing for voice;
+    # events are the bulk and are ALSO surfaced per-turn via the uncached
+    # candidate shortlist (full text) — so events go last and absorb the cut.
     parts: List[str] = []
     parts.append("# WORLD CORPUS — schemas\n\n" + corpus.schemas_md)
     parts.append("\n\n# WORLD CORPUS — tag vocabulary\n\n" + corpus.tags_md)
 
-    parts.append("\n\n# WORLD CORPUS — events\n")
-    for ev in corpus.events:
-        parts.append("\n\n" + ev.raw_markdown)
-
-    parts.append("\n\n# WORLD CORPUS — figures\n")
+    parts.append("\n\n# WORLD CORPUS — figures (cameo cast — use these names/handles for reactions)\n")
     for fg in corpus.figures:
         parts.append("\n\n" + fg.raw_markdown)
 
@@ -244,10 +247,14 @@ def render_corpus_for_prompt(corpus: WorldCorpus, *, max_chars: int = 180_000) -
     for eg in corpus.endgames:
         parts.append("\n\n" + eg.raw_markdown)
 
+    parts.append("\n\n# WORLD CORPUS — events\n")
+    for ev in corpus.events:
+        parts.append("\n\n" + ev.raw_markdown)
+
     text = "".join(parts)
     if len(text) > max_chars:
-        # Conservatively trim — keep schemas + tags + as many event/figure/endgame
-        # records as fit. The Oracle still gets the spine.
+        # Trim the tail (events) — the per-turn shortlist re-surfaces event
+        # text uncached, so truncated events remain reachable.
         text = text[:max_chars] + "\n\n[corpus truncated to fit prompt budget]"
     return text
 

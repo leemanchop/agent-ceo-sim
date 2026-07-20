@@ -18,6 +18,10 @@ export type CreateRunBody = {
     one_liner: string;
     industry: string;
     founder_vibe?: string;
+    /** User-provided founder name — researcher treats it as ground truth. */
+    founder?: string;
+    /** User-provided founder X handle (with or without @). */
+    founder_handle?: string;
   } | null;
   settings?: {
     length_mode?: "micro" | "short" | "medium" | "long";

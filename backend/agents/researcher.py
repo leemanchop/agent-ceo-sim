@@ -69,6 +69,12 @@ company:
   funding_total_usd: int
   notable_investors: [list]
   founded_year: int
+  # Ground these three in your research (press, Crunchbase-style coverage,
+  # the company's own claims). They seed the live dashboard. When you cannot
+  # find a credible figure, put 0 — never invent one.
+  estimated_valuation_usd: int   # 0 if unknown
+  headcount: int                 # 0 if unknown
+  revenue_annual_usd: int        # 0 if unknown (ARR / run-rate if reported)
 
 founders:
   - name: ...
@@ -130,6 +136,14 @@ async def run_researcher(
     one_liner = user_input.get("one_liner") or ""
     industry = user_input.get("industry") or "other"
     founder_vibe = user_input.get("founder_vibe") or "stanford_dropout"
+    founder_name = (user_input.get("founder") or "").strip()
+    founder_handle = (user_input.get("founder_handle") or "").strip()
+
+    founder_lines = ""
+    if founder_name:
+        founder_lines += f"- Founder name (user-provided — GROUND TRUTH, use exactly): {founder_name}\n"
+    if founder_handle:
+        founder_lines += f"- Founder X handle (user-provided — GROUND TRUTH): {founder_handle}\n"
 
     user_prompt = f"""\
 The user has submitted:
@@ -137,11 +151,13 @@ The user has submitted:
 - One-liner: {one_liner}
 - Industry tag: {industry}
 - Founder vibe (selector): {founder_vibe}
-
+{founder_lines}
 Research this company and produce the Company Bible per the schema in your
 system prompt. Use web_search to find the real founder, real tweets, real
-press coverage. If the company is fake/synthetic, generate a plausible bible
-and set synthetic: true.
+press coverage. If the user provided a founder name/handle above, that is
+ground truth — put it in founders[0] verbatim and research THAT person.
+If the company is fake/synthetic, generate a plausible bible and set
+synthetic: true — but still use any user-provided founder name verbatim.
 
 Cap your search at ~6 queries. Stop when the bible is dense, not exhaustive.
 """
@@ -217,7 +233,10 @@ Cap your search at ~6 queries. Stop when the bible is dense, not exhaustive.
     if not bible:
         # Last-ditch synthetic. Should be rare — the model almost always emits
         # something parseable — but better safe than 500ing.
-        bible = _synthetic_bible(company_name, one_liner, industry, founder_vibe)
+        bible = _synthetic_bible(
+            company_name, one_liner, industry, founder_vibe,
+            founder_name=founder_name, founder_handle=founder_handle,
+        )
         bible["synthetic"] = True
 
     if on_event:
@@ -254,7 +273,8 @@ def _extract_yaml_bible(text: str) -> Optional[Dict[str, Any]]:
 
 
 def _synthetic_bible(
-    name: str, one_liner: str, industry: str, vibe: str
+    name: str, one_liner: str, industry: str, vibe: str,
+    founder_name: str = "", founder_handle: str = "",
 ) -> Dict[str, Any]:
     """Fallback bible when web research yields nothing usable."""
     return {
@@ -270,7 +290,9 @@ def _synthetic_bible(
         },
         "founders": [
             {
-                "name": "[Founder]",
+                # Never ship literal bracket placeholders as names — they
+                # leak into rendered event text (UX-1).
+                "name": founder_name or "The Founder",
                 "role": "CEO",
                 "persona_vibe": vibe,
                 "public_quotes": [
@@ -279,7 +301,7 @@ def _synthetic_bible(
                     "8 hours of meetings to align on a thing my CTO could've shipped in 2",
                 ],
                 "notable_history": [],
-                "twitter_handle": "@founder",
+                "twitter_handle": founder_handle or "@founder",
             }
         ],
         "product": {

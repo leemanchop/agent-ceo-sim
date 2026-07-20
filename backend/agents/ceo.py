@@ -72,8 +72,9 @@ register the Editor will reject your output and you'll get re-prompted):
 PER TURN, YOU PRODUCE:
 
 1) HIDDEN REASONING (visible to user but in-fiction your private thought):
-   80-150 tokens, lowercase, em-dashes, your voice. Reason through the choices
-   the way you'd DM your cofounder, not write a board memo.
+   40-70 tokens, TWO SHORT LINES MAX — the user reads this inside a
+   30-second prediction window. Lowercase, em-dashes, your voice. The gut
+   take you'd DM your cofounder, not the full deliberation.
 
 2) COMMIT to exactly one choice from the list. State it: "doing: <choice_id>"
    followed by a one-line justification in your voice.
@@ -145,7 +146,7 @@ CHOICES — pick exactly one, by id:
 {json.dumps(event_card.get('choices', []), indent=2)}
 
 Produce strict JSON per the schema in your system prompt. No code fence.
-Reasoning first (80-150 tokens, your voice), then commit, then artifacts.
+Reasoning first (40-70 tokens, two short lines max), then commit, then artifacts.
 """
 
 

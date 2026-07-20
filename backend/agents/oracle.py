@@ -97,6 +97,13 @@ PER TURN, YOUR JOB IS:
    about the company — the right rail must never be silent.
    Pull from Greek-chorus parody handles for any accusatory beat. Real-named
    figures only react.
+   EVERY twitter/discord reaction MUST carry a `handle` AND `name` — an
+   unnamed account breaks the feed. Use the FIG-CHORUS cast from the corpus
+   as your recurring ensemble (e.g. @litcapital, @TrungTPhan, @VCBrags,
+   @AnonVCs, @BasedBeffJezos, @openspec, @ParodyMarc, @AGIEnjoyer) — the
+   same voices recurring across turns is what makes the feed feel alive.
+   Match the handle to the beat (e/acc voice for AI beats, engineer-cynic
+   for demo/wrapper beats, finance-meme for fundraising beats).
 7) UPDATE the foreshadow tracker: plant new seeds, mark paid-off seeds,
    re-roll or expire stragglers.
 8) COMPUTE stats deltas from the event's effects + general consequences. Stats
@@ -222,7 +229,7 @@ ORACLE_TOOL: Dict[str, Any] = {
                 "items": {
                     "type": "object",
                     "additionalProperties": True,
-                    "required": ["source", "body"],
+                    "required": ["source", "body", "handle", "name"],
                     "properties": {
                         "source": {"type": "string"},
                         "handle": {"type": "string"},
@@ -351,10 +358,16 @@ def _candidate_shortlist(state: RunState, *, size: int = 16) -> str:
         rng = random.Random(f"{state.run_id}:{state.turn}")
         rng.shuffle(pool)
         shortlist = pool[:size]
-        return "\n".join(
-            f"- {ev.record_id} — {ev.title} (severity {ev.severity or '?'})"
-            for ev in shortlist
-        )
+        # Include each candidate's full record text (capped) — the cached
+        # corpus block truncates its events tail, so this uncached section
+        # is the only guaranteed-complete copy of these candidates.
+        blocks = []
+        for ev in shortlist:
+            body = (ev.raw_markdown or "").strip()
+            if len(body) > 900:
+                body = body[:900] + " […]"
+            blocks.append(body)
+        return "\n\n".join(blocks)
     except Exception as exc:  # noqa: BLE001 — never let shortlisting break a turn
         print(f"[oracle] candidate shortlist failed ({type(exc).__name__}: {exc})")
         return "(no shortlist — select from the full corpus above)"

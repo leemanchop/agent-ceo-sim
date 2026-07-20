@@ -25,8 +25,10 @@ export function Timeline({
         className="px-3 py-2 border-b border-ink flex items-center justify-between"
         style={{ borderBottomWidth: "1.4px" }}
       >
-        <div className="tag">RUN TIMELINE</div>
-        <div className="font-mono text-soft" style={{ fontSize: 10 }}>
+        <div className="tag" style={{ fontFamily: "var(--font-body)" }}>
+          RUN TIMELINE
+        </div>
+        <div className="font-body text-soft" style={{ fontSize: 10 }}>
           T{entries.length}
         </div>
       </div>
@@ -87,7 +89,7 @@ function TimelineRow({
           }}
         />
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5 font-mono text-soft" style={{ fontSize: 9 }}>
+          <div className="flex items-center gap-1.5 font-body text-soft" style={{ fontSize: 9 }}>
             <span>D {String(entry.day).padStart(3, "0")}</span>
             <span className="text-soft">·</span>
             <span>T{entry.turn}</span>

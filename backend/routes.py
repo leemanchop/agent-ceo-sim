@@ -395,6 +395,13 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                             c for c in (event_card.get("choices") or [])
                             if isinstance(c, dict)
                         ]
+                        # Deterministic slot-resolve pass (UX-1): catch any
+                        # [FOUNDER]/[COMPANY]/… token the Oracle forgot.
+                        slots = _slot_map(state)
+                        event_card["title"] = _resolve_slots(event_card.get("title"), slots)
+                        event_card["body"] = _resolve_slots(event_card.get("body"), slots)
+                        for c in event_card["choices"]:
+                            c["label"] = _resolve_slots(c.get("label"), slots)
 
                         yield sse("turn.start", {
                             "turn": state.turn,
@@ -415,13 +422,14 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                                 continue  # model emitted a bare string beat
                             yield sse("turn.mini", {
                                 "kind": atm.get("kind", "atmospheric"),
-                                "headline": atm.get("headline", ""),
+                                "headline": _resolve_slots(atm.get("headline", ""), slots),
                                 "stat_deltas": atm.get("stat_deltas", {}),
                             })
                         reactions = oracle_out.get("reactions") or []
                         for r in (reactions if isinstance(reactions, list) else []):
                             if not isinstance(r, dict):
                                 continue  # model emitted "@handle: text" strings
+                            r["body"] = _resolve_slots(r.get("body"), slots)
                             yield sse(_feed_event_kind(r), _feed_payload(r))
 
                         # ---- 2) CEO streams hidden reasoning ----
@@ -816,6 +824,53 @@ def _last_ceo_commit_for_oracle(state):
     }
 
 
+def _slot_map(state) -> Dict[str, str]:
+    """Deterministic slot→value map from the bible (UX-1).
+
+    game/personalization.md specifies a slot resolver; historically the
+    Oracle LLM was trusted to substitute [FOUNDER]/[COMPANY]/… itself and
+    any forgotten token leaked verbatim into the UI. This map backs the
+    server-side resolve pass in _resolve_slots. World-corpus slots that
+    need casting decisions ([TIER1_VC_PARTNER] etc.) remain the LLM's job."""
+    bible = state.bible or {}
+    company = bible.get("company") or {}
+    founders = bible.get("founders") or []
+    primary = founders[0] if founders and isinstance(founders[0], dict) else {}
+    product = bible.get("product") or {}
+    out: Dict[str, str] = {}
+    founder = primary.get("name")
+    if isinstance(founder, str) and founder.strip() and not founder.startswith("["):
+        out["FOUNDER"] = founder.strip()
+    cname = company.get("display_name") or company.get("name")
+    if isinstance(cname, str) and cname.strip() and not cname.startswith("["):
+        out["COMPANY"] = cname.strip()
+    industry = company.get("industry")
+    if isinstance(industry, str) and industry.strip():
+        out["INDUSTRY"] = industry.strip()
+    noun = product.get("category_noun")
+    if isinstance(noun, str) and noun.strip():
+        out["PRODUCT_NOUN"] = noun.strip()
+    for f in founders[1:2]:
+        if isinstance(f, dict) and (f.get("role") or "").upper() == "CTO":
+            n = f.get("name")
+            if isinstance(n, str) and n.strip() and not n.startswith("["):
+                out["CTO"] = n.strip()
+    return out
+
+
+def _resolve_slots(text: Any, slots: Dict[str, str]) -> Any:
+    """Replace [FOUNDER]-style tokens (any casing) the Oracle forgot to fill.
+    Non-strings pass through untouched."""
+    if not isinstance(text, str) or "[" not in text or not slots:
+        return text
+    for key, val in slots.items():
+        for variant in (key.upper(), key.capitalize(), key.lower()):
+            token = f"[{variant}]"
+            if token in text:
+                text = text.replace(token, val)
+    return text
+
+
 def _as_str(x: Any) -> str:
     """Coerce an LLM-authored should-be-string field to a plain string.
     None -> ""; dicts/lists -> compact JSON; everything else -> str()."""
@@ -877,15 +932,40 @@ def _feed_event_kind(reaction: Dict[str, Any]) -> str:
     }.get(src, "feed.tweet")
 
 
+# Fallback chorus voices for reactions the Oracle emitted without a handle —
+# rotating known cast beats "@unknown" popping up in the feed. Keep in sync
+# with world/figures/cast.md FIG-CHORUS-*.
+_CHORUS_FALLBACK = [
+    ("@litcapital", "lit capital"),
+    ("@AnonVCs", "Anonymous VC"),
+    ("@openspec", "openspec"),
+    ("@BasedBeffJezos", "Beff Jezos — e/acc"),
+    ("@founderhustleculture", "Founder Hustle Culture"),
+    ("@AGIEnjoyer", "AGI Enjoyer"),
+]
+
+
 def _feed_payload(reaction: Dict[str, Any]) -> Dict[str, Any]:
     src = reaction.get("source") or "twitter"
     src = src.lower() if isinstance(src, str) else "twitter"
     if src in ("twitter", "discord"):
+        handle = reaction.get("handle")
+        name = reaction.get("name")
+        if not isinstance(handle, str) or not handle.strip():
+            # Deterministic per-body pick so retries don't reshuffle voices.
+            fh, fn = _CHORUS_FALLBACK[
+                len(_as_str(reaction.get("body"))) % len(_CHORUS_FALLBACK)
+            ]
+            handle = fh
+            if not isinstance(name, str) or not name.strip():
+                name = fn
+        if not isinstance(name, str) or not name.strip():
+            name = handle.lstrip("@")
         return {
-            "handle": reaction.get("handle", "@unknown"),
-            "display_name": reaction.get("name", "Unknown"),
+            "handle": handle,
+            "display_name": name,
             "verified": True,
-            "avatar_seed": _as_str(reaction.get("handle") or "x").lstrip("@"),
+            "avatar_seed": _as_str(handle).lstrip("@"),
             "body": reaction.get("body", ""),
             "reactions": {"likes": 0, "retweets": 0, "quotes": 0},
             "ts": _ts_now(),
@@ -942,10 +1022,28 @@ def _apply_bible_to_initial_stats(state) -> None:
         "bootstrapped": dict(valuation=4_000_000, cash=500_000, burn=40_000, headcount=4),
     }
     p = presets.get(stage, presets["seed"])
-    state.stats.valuation = p["valuation"]
+
+    def _researched(field: str):
+        """Researcher-grounded value: int when the bible carries the field
+        (0 = 'couldn't find it' per UX-1 — surfaced as 0, not a fake preset);
+        None when the field is absent entirely (pre-UX-1 bibles, templates)."""
+        v = company.get(field)
+        if v is None:
+            return None
+        try:
+            return max(0, int(v))
+        except (TypeError, ValueError):
+            return None
+
+    rv = _researched("estimated_valuation_usd")
+    rh = _researched("headcount")
+    rr = _researched("revenue_annual_usd")
+    state.stats.valuation = rv if rv is not None else p["valuation"]
+    state.stats.headcount = rh if rh is not None else p["headcount"]
+    if rr is not None:
+        state.stats.revenue = rr
     state.stats.cash = max(p["cash"], funding_total // 2 if funding_total else p["cash"])
     state.stats.burn = p["burn"]
-    state.stats.headcount = p["headcount"]
     state.stats.day = 14
     state.stats.fbi_awareness = 0
     state.stats.fraud_score = 0
