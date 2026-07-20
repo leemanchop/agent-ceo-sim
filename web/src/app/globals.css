@@ -80,6 +80,14 @@
 }
 
 @layer components {
+  /* Run timeline: EVERYTHING in the body font (owner preference, UX-4).
+     Scoped force-override so shared classes (.pill/.tag/font-mono) inside
+     the timeline can't reintroduce the mono face. */
+  .timeline-typewriter,
+  .timeline-typewriter * {
+    font-family: var(--font-body) !important;
+  }
+
   /* core pill */
   .pill {
     display: inline-flex;

@@ -20,7 +20,7 @@ export function Timeline({
   }, [entries.length]);
 
   return (
-    <div className="flex flex-col h-full bg-paper">
+    <div className="timeline-typewriter flex flex-col h-full bg-paper">
       <div
         className="px-3 py-2 border-b border-ink flex items-center justify-between"
         style={{ borderBottomWidth: "1.4px" }}
