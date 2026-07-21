@@ -220,7 +220,6 @@ export default function RunPage() {
     lastValNotifRef.current = key;
     const fmtM = (n: number) =>
       `${n < 0 ? "-" : "+"}$${Math.abs(n / 1_000_000).toFixed(1)}M`;
-    const now = stats?.valuation ?? 0;
     const why =
       event.effects_summary?.find((e) => e.why)?.why ??
       "the market did market things.";
@@ -229,9 +228,7 @@ export default function RunPage() {
       kind: "stat_threshold",
       severity: dv < 0 ? "warn" : "info",
       source_label: "valuation · dashboard",
-      title: `valuation ${dv < 0 ? "▼" : "▲"} ${fmtM(dv)} → $${(
-        now / 1_000_000
-      ).toFixed(1)}M`,
+      title: `valuation ${dv < 0 ? "▼" : "▲"} ${fmtM(dv)}`,
       body: why,
       ts: "now",
       ttl_ms: 7000,
@@ -281,16 +278,20 @@ export default function RunPage() {
         </Link>
         <span className="text-soft" style={{ fontSize: 10 }}>/</span>
         <span
-          className="font-mono uppercase tracking-wider"
+          className="font-mono uppercase tracking-wider whitespace-nowrap"
           style={{ fontSize: 11, fontWeight: 700 }}
         >
           {bible.display_name.toUpperCase()}
         </span>
         <span className="text-soft" style={{ fontSize: 10 }}>·</span>
-        <span className="font-body italic text-soft" style={{ fontSize: 11 }}>
+        <span
+          className="font-body italic text-soft truncate min-w-0 flex-1"
+          style={{ fontSize: 11 }}
+          title={bible.one_liner}
+        >
           &quot;{bible.one_liner}&quot;
         </span>
-        <span className="ml-auto flex items-center gap-2">
+        <span className="ml-auto flex items-center gap-2 shrink-0 whitespace-nowrap">
           {replayMode ? (
             <span className="pill alarm solid" style={{ fontSize: 10 }}>
               ▶ REPLAY
