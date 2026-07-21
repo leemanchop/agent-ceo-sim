@@ -189,6 +189,38 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                 return
 
             # ---- live research path ------------------------------------
+            # Idempotency guards: /start is an EventSource target, and
+            # EventSources auto-reconnect on any drop. Without these, every
+            # reconnect would spawn ANOTHER researcher (an Opus + web_search
+            # call, ~$1+ each) for the same run.
+            if state.bible:
+                # Research already finished — a reconnect just needs the
+                # terminal events to proceed to /stream.
+                yield sse("researcher.bible_complete", {"bible": state.bible})
+                state.status = "streaming"
+                yield sse("stream.open", {
+                    "version": "1.0.0", "first_turn_in_seconds": 2,
+                })
+                return
+            if getattr(state, "_research_inflight", False):
+                # Another connection's researcher is mid-flight: wait for it
+                # instead of double-billing. Ping to keep the stream alive.
+                for _ in range(90):
+                    await asyncio.sleep(2.0)
+                    if state.bible:
+                        yield sse("researcher.bible_complete", {"bible": state.bible})
+                        state.status = "streaming"
+                        yield sse("stream.open", {
+                            "version": "1.0.0", "first_turn_in_seconds": 2,
+                        })
+                        return
+                    if not getattr(state, "_research_inflight", False):
+                        break  # first researcher died — fall through to retry
+                    yield ": ping\n\n"
+                if state.bible:
+                    return
+            state._research_inflight = True  # type: ignore[attr-defined]
+
             queue: asyncio.Queue = asyncio.Queue()
 
             async def on_event(kind: str, data: Dict[str, Any]) -> None:
@@ -227,6 +259,7 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                         "_exc": str(e),
                     }))
                 finally:
+                    state._research_inflight = False  # type: ignore[attr-defined]
                     await queue.put(("__done__", None))
 
             task = asyncio.create_task(runner())
@@ -248,8 +281,12 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                         break
                     yield sse(kind, data)
             finally:
-                if not task.done():
-                    task.cancel()
+                # Do NOT cancel the researcher on client disconnect — the
+                # tokens are already being paid for, and the result persists
+                # to state/DB so the reconnecting client (see the idempotency
+                # guards above) picks it up instead of re-billing a fresh
+                # research pass. The task self-terminates within ~2 minutes.
+                pass
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
