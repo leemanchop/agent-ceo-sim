@@ -258,6 +258,11 @@ export function useRun({
     return MOCK_BIBLE;
   }, [archive, runId]);
   const [liveBible, setLiveBible] = useState<CompanyBible>(initialBible);
+  // Mirror into a ref so once-mounted SSE handlers (onEndgame's post-mortem
+  // handoff) see the CURRENT bible, not the mock captured at mount — the
+  // stale closure was why the post-mortem showed "Vellum" for every run.
+  const liveBibleRef = useRef<CompanyBible>(initialBible);
+  liveBibleRef.current = liveBible;
   // Reset when archive/runId changes.
   useEffect(() => {
     setLiveBible(initialBible);
@@ -601,6 +606,8 @@ export function useRun({
           one_liner?: string;
           industry?: string;
           founder_vibe?: string;
+          founder?: string;
+          founder_handle?: string;
           length?: string;
           craziness?: string;
         } = {};
@@ -623,6 +630,7 @@ export function useRun({
             one_liner: userInput.one_liner ?? prev.one_liner,
             industry: userInput.industry ?? prev.industry,
             founder_vibe: userInput.founder_vibe ?? prev.founder_vibe,
+            founder: userInput.founder || prev.founder,
           }));
         }
 
@@ -636,6 +644,8 @@ export function useRun({
                 one_liner: userInput.one_liner || "",
                 industry: userInput.industry || "other",
                 founder_vibe: userInput.founder_vibe || undefined,
+                founder: userInput.founder || undefined,
+                founder_handle: userInput.founder_handle || undefined,
               },
           settings: {
             length_mode: (userInput.length as "micro" | "short" | "medium" | "long") || "medium",
@@ -871,7 +881,7 @@ export function useRun({
                 endgame_id: eg.id,
                 title: eg.title,
                 share_card_url: eg.share_card_url,
-                bible: liveBible,
+                bible: liveBibleRef.current,
                 stats: undefined as unknown,  // filled below if available
                 achievements: undefined as unknown,
                 saved_at: new Date().toISOString(),

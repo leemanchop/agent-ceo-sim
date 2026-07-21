@@ -31,7 +31,11 @@
   --x-rule: #2f3336;
   --x-gold: #f5b900;
 
-  --font-body: var(--font-special-elite), 'Courier Prime', 'Courier New', monospace;
+  /* Owner decision (UX-4, after a fun miscommunication): JetBrains Mono —
+     the clean terminal face — everywhere except the X feed. The typewriter
+     (Special Elite) was the "weird font" being reported. To restore it:
+     --font-body: var(--font-special-elite), 'Courier Prime', monospace */
+  --font-body: var(--font-jetbrains-mono), ui-monospace, monospace;
   --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace;
   --font-x: 'Helvetica Neue', 'Helvetica', 'Segoe UI', system-ui, sans-serif;
 

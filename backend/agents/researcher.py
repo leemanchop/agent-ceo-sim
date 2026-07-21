@@ -18,7 +18,7 @@ import json
 import re
 from typing import Any, Awaitable, Callable, Dict, Optional
 
-from .common import DEFAMATION_PREAMBLE, MODEL_RESEARCHER
+from .common import DEFAMATION_PREAMBLE, MODEL_RESEARCHER, MODEL_RESEARCHER_DEEP
 
 # usage_tracker lives in /root/backend on Modal and ../usage_tracker.py locally;
 # both are on sys.path before this module is imported.
@@ -69,6 +69,12 @@ company:
   funding_total_usd: int
   notable_investors: [list]
   founded_year: int
+  # Ground these three in your research (press, Crunchbase-style coverage,
+  # the company's own claims). They seed the live dashboard. When you cannot
+  # find a credible figure, put 0 — never invent one.
+  estimated_valuation_usd: int   # 0 if unknown
+  headcount: int                 # 0 if unknown
+  revenue_annual_usd: int        # 0 if unknown (ARR / run-rate if reported)
 
 founders:
   - name: ...
@@ -130,6 +136,14 @@ async def run_researcher(
     one_liner = user_input.get("one_liner") or ""
     industry = user_input.get("industry") or "other"
     founder_vibe = user_input.get("founder_vibe") or "stanford_dropout"
+    founder_name = (user_input.get("founder") or "").strip()
+    founder_handle = (user_input.get("founder_handle") or "").strip()
+
+    founder_lines = ""
+    if founder_name:
+        founder_lines += f"- Founder name (user-provided — GROUND TRUTH, use exactly): {founder_name}\n"
+    if founder_handle:
+        founder_lines += f"- Founder X handle (user-provided — GROUND TRUTH): {founder_handle}\n"
 
     user_prompt = f"""\
 The user has submitted:
@@ -137,11 +151,13 @@ The user has submitted:
 - One-liner: {one_liner}
 - Industry tag: {industry}
 - Founder vibe (selector): {founder_vibe}
-
+{founder_lines}
 Research this company and produce the Company Bible per the schema in your
 system prompt. Use web_search to find the real founder, real tweets, real
-press coverage. If the company is fake/synthetic, generate a plausible bible
-and set synthetic: true.
+press coverage. If the user provided a founder name/handle above, that is
+ground truth — put it in founders[0] verbatim and research THAT person.
+If the company is fake/synthetic, generate a plausible bible and set
+synthetic: true — but still use any user-provided founder name verbatim.
 
 Cap your search at ~6 queries. Stop when the bible is dense, not exhaustive.
 """
@@ -152,17 +168,85 @@ Cap your search at ~6 queries. Stop when the bible is dense, not exhaustive.
             {"query": f"{company_name} {one_liner}", "step": 1, "of": 6},
         )
 
-    # We use the streaming API so we can surface step-by-step progress to the UI.
-    # Anthropic's web_search tool runs server-side; we observe tool_use blocks
-    # in the stream and emit the corresponding SSE event.
+    # Pass 1: the cheap model. If its dossier scores below the quality bar
+    # (thin footprint, no voice anchors, no sources), escalate to the deep
+    # model and keep whichever bible scores higher. Well-covered companies
+    # never pay for the deep pass.
+    bible = await _research_pass(
+        model=MODEL_RESEARCHER,
+        user_prompt=user_prompt,
+        run_id=run_id,
+        on_event=on_event,
+    )
+    score, gaps = _bible_quality(bible, provided_founder=bool(founder_name))
+    if score < RESEARCH_QUALITY_BAR and MODEL_RESEARCHER_DEEP != MODEL_RESEARCHER:
+        print(
+            f"[researcher] run={run_id} {MODEL_RESEARCHER} scored "
+            f"{score}/{RESEARCH_QUALITY_BAR} (gaps: {', '.join(gaps) or 'none'}) "
+            f"— escalating to {MODEL_RESEARCHER_DEEP}"
+        )
+        if on_event:
+            await on_event(
+                "researcher.searching",
+                {"query": "shallow footprint — escalating to deep research",
+                 "step": 5, "of": 6},
+            )
+        deep = await _research_pass(
+            model=MODEL_RESEARCHER_DEEP,
+            user_prompt=user_prompt,
+            run_id=run_id,
+            on_event=on_event,
+        )
+        deep_score, _ = _bible_quality(deep, provided_founder=bool(founder_name))
+        print(
+            f"[researcher] run={run_id} deep pass scored {deep_score} "
+            f"vs {score} — keeping {'deep' if deep_score >= score else 'first'}"
+        )
+        if deep and deep_score >= score:
+            bible = deep
+
+    if not bible:
+        # Last-ditch synthetic. Should be rare — the model almost always emits
+        # something parseable — but better safe than 500ing.
+        bible = _synthetic_bible(
+            company_name, one_liner, industry, founder_vibe,
+            founder_name=founder_name, founder_handle=founder_handle,
+        )
+        bible["synthetic"] = True
+
+    if on_event:
+        # Drip the major sections so the upload-confirmation UI fills in.
+        for section in ("company", "founders", "product", "market", "vibe", "voice_anchors"):
+            if section in bible:
+                await on_event(
+                    "researcher.bible_partial",
+                    {"section": section, "content": bible[section]},
+                )
+        await on_event("researcher.bible_complete", {"bible": bible})
+
+    return bible
+
+
+async def _research_pass(
+    *,
+    model: str,
+    user_prompt: str,
+    run_id: Optional[str],
+    on_event: Optional[Callable[[str, Dict[str, Any]], Awaitable[None]]],
+) -> Optional[Dict[str, Any]]:
+    """One full research attempt with the given model. Returns the parsed
+    bible dict, or None on API failure / unparseable output.
+
+    We use the streaming API so we can surface step-by-step progress to the
+    UI. Anthropic's web_search tool runs server-side; we observe tool_use
+    blocks in the stream and emit the corresponding SSE events."""
     text_buf: list[str] = []
     step = 1
-
     try:
         with usage_tracker.tracked_messages_stream(
             run_id=run_id,
             agent="researcher",
-            model=MODEL_RESEARCHER,
+            model=model,
             max_tokens=8000,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
@@ -204,33 +288,85 @@ Cap your search at ~6 queries. Stop when the bible is dense, not exhaustive.
                         text_buf.append(getattr(delta, "text", ""))
                 # other event types ignored
     except Exception as e:  # pragma: no cover — network / SDK errors
-        # Fall through to synthetic generation if web search blew up.
+        # Caller falls through to escalation / synthetic generation.
         if on_event:
             await on_event(
                 "researcher.searching",
                 {"error": str(e), "step": step, "of": 6, "fallback": "synthetic"},
             )
+        return None
 
-    full_text = "".join(text_buf)
-    bible = _extract_yaml_bible(full_text)
+    return _extract_yaml_bible("".join(text_buf))
 
-    if not bible:
-        # Last-ditch synthetic. Should be rare — the model almost always emits
-        # something parseable — but better safe than 500ing.
-        bible = _synthetic_bible(company_name, one_liner, industry, founder_vibe)
-        bible["synthetic"] = True
 
-    if on_event:
-        # Drip the major sections so the upload-confirmation UI fills in.
-        for section in ("company", "founders", "product", "market", "vibe", "voice_anchors"):
-            if section in bible:
-                await on_event(
-                    "researcher.bible_partial",
-                    {"section": section, "content": bible[section]},
-                )
-        await on_event("researcher.bible_complete", {"bible": bible})
+# Escalate to the deep model when a bible scores below this (max 10).
+# The rubric rewards exactly what the game consumes: a real founder name,
+# verbatim voice anchors, sources, dirt, and grounded numbers.
+RESEARCH_QUALITY_BAR = 5
 
-    return bible
+
+def _bible_quality(
+    bible: Optional[Dict[str, Any]], *, provided_founder: bool = False
+) -> tuple:
+    """Score a research pass 0-10 and list what's missing.
+
+    A `synthetic: true` bible scores 0 by definition — the researcher
+    itself declared the web research insufficient."""
+    if not isinstance(bible, dict) or not bible:
+        return 0, ["no parseable bible"]
+    if bible.get("synthetic"):
+        return 0, ["researcher marked it synthetic"]
+    score = 0
+    gaps = []
+
+    founders = bible.get("founders") or []
+    f0 = founders[0] if founders and isinstance(founders[0], dict) else {}
+    name = (f0.get("name") or "").strip()
+    if provided_founder or (
+        name and not name.startswith("[") and name.lower() != "the founder"
+    ):
+        score += 2
+    else:
+        gaps.append("no real founder name")
+
+    va = (bible.get("voice_anchors") or {}).get("founder_register") or {}
+    examples = va.get("real_examples") or []
+    score += min(len(examples), 3)
+    if len(examples) < 2:
+        gaps.append(f"only {len(examples)} verbatim voice examples")
+
+    if len(f0.get("public_quotes") or []) >= 2:
+        score += 1
+    else:
+        gaps.append("fewer than 2 public quotes")
+
+    if len(bible.get("sources_consulted") or []) >= 2:
+        score += 1
+    else:
+        gaps.append("fewer than 2 sources consulted")
+
+    if (bible.get("vibe") or {}).get("notable_dirt"):
+        score += 1
+    else:
+        gaps.append("no notable dirt")
+
+    company = bible.get("company") or {}
+    if (company.get("funding_total_usd") or 0) > 0 or (
+        company.get("notable_investors") or []
+    ):
+        score += 1
+    else:
+        gaps.append("no funding facts")
+
+    if any(
+        (company.get(k) or 0) > 0
+        for k in ("estimated_valuation_usd", "headcount", "revenue_annual_usd")
+    ):
+        score += 1
+    else:
+        gaps.append("no grounded stats")
+
+    return score, gaps
 
 
 def _extract_yaml_bible(text: str) -> Optional[Dict[str, Any]]:
@@ -254,7 +390,8 @@ def _extract_yaml_bible(text: str) -> Optional[Dict[str, Any]]:
 
 
 def _synthetic_bible(
-    name: str, one_liner: str, industry: str, vibe: str
+    name: str, one_liner: str, industry: str, vibe: str,
+    founder_name: str = "", founder_handle: str = "",
 ) -> Dict[str, Any]:
     """Fallback bible when web research yields nothing usable."""
     return {
@@ -270,7 +407,9 @@ def _synthetic_bible(
         },
         "founders": [
             {
-                "name": "[Founder]",
+                # Never ship literal bracket placeholders as names — they
+                # leak into rendered event text (UX-1).
+                "name": founder_name or "The Founder",
                 "role": "CEO",
                 "persona_vibe": vibe,
                 "public_quotes": [
@@ -279,7 +418,7 @@ def _synthetic_bible(
                     "8 hours of meetings to align on a thing my CTO could've shipped in 2",
                 ],
                 "notable_history": [],
-                "twitter_handle": "@founder",
+                "twitter_handle": founder_handle or "@founder",
             }
         ],
         "product": {

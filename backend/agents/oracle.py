@@ -25,10 +25,11 @@ tracker) go into a separate UNCACHED block. This is the load-bearing optimizatio
 from __future__ import annotations
 
 import json
+import random
 import re
 from typing import Any, Dict, List, Optional
 
-from corpus_loader import get_corpus, render_corpus_for_prompt  # type: ignore
+from corpus_loader import get_corpus, render_corpus_for_prompt, filter_events  # type: ignore
 from state import RunState  # type: ignore
 import usage_tracker  # type: ignore
 
@@ -72,6 +73,31 @@ When generating media artifacts, SHIFT into the artifact's house style:
 - Board memo: stiff, "Per our last discussion..."
 - Glassdoor: forum-poster register, anonymous, specific
 
+WORLD CANON — THE PRESUMPTION OF OPERATING REALITY (load-bearing; violating
+this breaks the entire game premise):
+
+- At run start, the company is EXACTLY what the bible says: a real,
+  functioning business. Its product works as described. The comedy engine
+  is watching the CEO choose the most ridiculous course of action FROM
+  WHERE THINGS STAND NOW — not discovering that everything was secretly
+  fake all along.
+- Company wrongdoing becomes TRUE only when the CEO actually chooses it
+  (see the run history + foreshadow tracker). Until a fraud was chosen,
+  it did not happen. NEVER state as narrator-fact that the product is
+  fake, the revenue is invented, or the demo is rigged unless the run
+  history shows the CEO making that specific bed.
+- Negative heat before (or beyond) what the CEO has earned must arrive as
+  ATTRIBUTED VOICES, never narrator truth: a rival ACCUSES, a burned
+  ex-contractor CLAIMS, a short-seller thread ALLEGES, a journalist ASKS.
+  ("A thread claims the 'autonomous' pipeline is 40 guys on WeChat" — the
+  world doesn't know if it's true, and neither does the narrator.)
+- When a corpus event presumes internal fraud that hasn't been chosen,
+  REFRAME it as (a) a temptation — someone inside proposes the fraudulent
+  shortcut and the CEO chooses — or (b) an external allegation per above.
+  Do not import the event's guilt as established fact.
+- EXCEPTION: preset templates (Theranos, FTX, …) start with pre-planted
+  seeds — THAT loaded state is canon and may be treated as already true.
+
 PER TURN, YOUR JOB IS:
 
 1) Read the foreshadow tracker (provided each turn). Note seeds in their
@@ -96,6 +122,13 @@ PER TURN, YOUR JOB IS:
    about the company — the right rail must never be silent.
    Pull from Greek-chorus parody handles for any accusatory beat. Real-named
    figures only react.
+   EVERY twitter/discord reaction MUST carry a `handle` AND `name` — an
+   unnamed account breaks the feed. Use the FIG-CHORUS cast from the corpus
+   as your recurring ensemble (e.g. @litcapital, @TrungTPhan, @VCBrags,
+   @AnonVCs, @BasedBeffJezos, @openspec, @ParodyMarc, @AGIEnjoyer) — the
+   same voices recurring across turns is what makes the feed feel alive.
+   Match the handle to the beat (e/acc voice for AI beats, engineer-cynic
+   for demo/wrapper beats, finance-meme for fundraising beats).
 7) UPDATE the foreshadow tracker: plant new seeds, mark paid-off seeds,
    re-roll or expire stragglers.
 8) COMPUTE stats deltas from the event's effects + general consequences. Stats
@@ -150,10 +183,13 @@ Use snake_case seed_ids per game/chaining.md naming patterns
 
 
 # ───────────────────────────────────────────────────────────────────────────
-# Tool-use schema. We force the Oracle to call this single tool, which means
-# the API itself validates the output shape and we never see free-form text.
-# This eliminates the JSON-parsing failure mode entirely — "valid JSON" is
-# now a hard guarantee from the Anthropic API, not a hope from a regex.
+# Tool-use schema. We force the Oracle to call this single tool, which
+# guarantees the response is a parseable JSON object (no free-form text, no
+# code fences). NOTE the limit: Anthropic does NOT validate tool input
+# against this schema server-side (no strict mode), so values can still
+# arrive mistyped — integers as "+2M"/null, arrays-of-strings as arrays of
+# objects, etc. Every consumer of this output must coerce defensively; the
+# uncoerced int() on stats_deltas was killing whole runs silently.
 # ───────────────────────────────────────────────────────────────────────────
 ORACLE_TOOL: Dict[str, Any] = {
     "name": "emit_oracle_turn",
@@ -218,7 +254,7 @@ ORACLE_TOOL: Dict[str, Any] = {
                 "items": {
                     "type": "object",
                     "additionalProperties": True,
-                    "required": ["source", "body"],
+                    "required": ["source", "body", "handle", "name"],
                     "properties": {
                         "source": {"type": "string"},
                         "handle": {"type": "string"},
@@ -298,8 +334,11 @@ def _last_turns_summary(state: RunState, k: int = 3) -> str:
     recent = state.turns[-k:]
     out = []
     for t in recent:
-        tweet = (t.artifact_tweet or "")[:140]
-        justification = t.justification or ""
+        # str() belt: pre-fix TurnRecords (rehydrated from disk) may hold a
+        # dict tweet/justification — slicing a dict raises and, worse, does
+        # so on EVERY retry because the poison lives in state.
+        tweet = str(t.artifact_tweet or "")[:140]
+        justification = str(t.justification or "")
         out.append(
             f"Turn {t.turn} | {t.category}/{t.severity} | "
             f"{t.event_title}\n  agent_picked={t.agent_choice_id}"
@@ -310,6 +349,77 @@ def _last_turns_summary(state: RunState, k: int = 3) -> str:
     return "\n".join(out)
 
 
+def _candidate_shortlist(state: RunState, *, size: int = 16) -> str:
+    """Build a per-run-varied shortlist of candidate events for the Oracle.
+
+    Root cause of "every run feels the same": the Oracle is handed the entire
+    corpus in the same fixed order every turn of every run, and (Anthropic's
+    default temperature already being 1.0) identical inputs gravitate to the
+    same salient events. We can't add sampling headroom, so we vary the INPUT:
+    run the cheap `filter_events` pre-filter, drop events already used in recent
+    turns, then seed-shuffle by (run_id, turn) so each run surfaces a different
+    slice. This goes in the UNCACHED user prompt, so the big cached corpus block
+    is untouched and per-turn cost does not regress.
+
+    Returns a markdown bullet list, or a graceful fallback line on any error.
+    """
+    try:
+        corpus = get_corpus()
+        company = (state.bible or {}).get("company", {}) or {}
+        industry = company.get("industry")
+        recent_ids = [t.event_id for t in state.turns[-8:]]
+        pool = filter_events(
+            corpus,
+            length_mode=state.length_mode(),
+            craziness=state.craziness(),
+            severity_floor=state.severity_floor(),
+            industry=industry,
+            exclude_ids=recent_ids,
+        )
+        # Prereq gating (chaining.md: "The raid is not random. Someone has
+        # to flip first."). An event whose prereq seeds haven't been planted
+        # by actual play must not be nudged into the Oracle's hands — that's
+        # how a legitimate company got accused of wholesale fraud on turn 4.
+        # Seeds count as satisfied once planted, whether or not paid off yet.
+        happened = {
+            sid for sid, s in state.tracker.seeds.items()
+            if s.status in ("active", "paid", "paid_lite")
+        }
+        pool = [
+            ev for ev in pool
+            if all(p in happened for p in (ev.prereqs or []))
+            and (not ev.prereqs_any or any(p in happened for p in ev.prereqs_any))
+        ]
+        # Early-turn severity ceiling: no XL before turn 3, no L on turn 1 —
+        # unless the run STARTED with planted seeds (preset templates), whose
+        # loaded state legitimately supports early heat.
+        if not happened:
+            if state.turn <= 1:
+                pool = [ev for ev in pool if (ev.severity or "S") not in ("L", "XL")]
+            elif state.turn <= 2:
+                pool = [ev for ev in pool if (ev.severity or "S") != "XL"]
+        if not pool:
+            return "(no shortlist — select from the full corpus above)"
+        # Stable per-(run, turn) seed: same run+turn reproduces, different runs
+        # diverge. random.Random accepts a string seed directly.
+        rng = random.Random(f"{state.run_id}:{state.turn}")
+        rng.shuffle(pool)
+        shortlist = pool[:size]
+        # Include each candidate's full record text (capped) — the cached
+        # corpus block truncates its events tail, so this uncached section
+        # is the only guaranteed-complete copy of these candidates.
+        blocks = []
+        for ev in shortlist:
+            body = (ev.raw_markdown or "").strip()
+            if len(body) > 900:
+                body = body[:900] + " […]"
+            blocks.append(body)
+        return "\n\n".join(blocks)
+    except Exception as exc:  # noqa: BLE001 — never let shortlisting break a turn
+        print(f"[oracle] candidate shortlist failed ({type(exc).__name__}: {exc})")
+        return "(no shortlist — select from the full corpus above)"
+
+
 def run_oracle(
     *,
     state: RunState,
@@ -318,6 +428,7 @@ def run_oracle(
     """Run the Oracle for one turn. Synchronous — Modal calls this in a
     function-call boundary so we can return a single JSON dict."""
     bible_yaml = state.bible_yaml_raw or json.dumps(state.bible or {}, indent=2)
+    candidate_section = _candidate_shortlist(state)
     user_prompt = f"""\
 === COMPANY BIBLE (this run) ===
 {bible_yaml}
@@ -328,6 +439,14 @@ length_mode: {state.length_mode()}
 craziness: {state.craziness()}
 severity_floor: {state.severity_floor()}
 stats: {json.dumps(state.stats.snapshot())}
+
+=== CANON REMINDER ===
+The company is legitimate except where the run history above shows the CEO
+choosing otherwise. Accusations come from voices; the narrator never asserts
+unearned fraud as fact.
+
+=== PRIORITY CANDIDATE EVENTS (sampled fresh for THIS run — prefer these; do not reuse recent events) ===
+{candidate_section}
 
 === FORESHADOW TRACKER (private — never expose to CEO) ===
 {state.tracker.to_prompt_block()}
@@ -364,10 +483,13 @@ Do not write any prose; the tool call is the entire response.
                     return tool_input
         return None
 
-    # Single-shot Haiku via forced tool_use. The API guarantees the tool
-    # input matches our schema — no JSON parsing, no truncation repair.
-    # If the call fails outright (network / 5xx / model refusal) we fall
-    # back to a template-aware deck instead of stalling the run.
+    # Single-shot Haiku via forced tool_use. Forcing the tool guarantees the
+    # response parses as a JSON object — but the API does NOT validate the
+    # values against our schema (no strict mode), so any field can still
+    # arrive mistyped. Downstream consumers coerce; here we only gate on the
+    # card being an object. If the call fails outright (network / 5xx /
+    # model refusal) we fall back to a template-aware deck instead of
+    # stalling the run.
     try:
         parsed = _call_tool(MODEL_ORACLE)
     except Exception as exc:  # noqa: BLE001 — we want broad recovery
@@ -377,7 +499,7 @@ Do not write any prose; the tool call is the entire response.
         )
         return _fallback_event(state)
 
-    if isinstance(parsed, dict) and parsed.get("event_card"):
+    if isinstance(parsed, dict) and isinstance(parsed.get("event_card"), dict):
         return parsed
     print(
         f"[oracle] turn={state.turn} run={state.run_id} "

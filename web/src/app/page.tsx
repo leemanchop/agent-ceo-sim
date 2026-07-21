@@ -42,6 +42,8 @@ export default function LandingPage() {
   const search = useSearchParams();
   const [name, setName] = useState("");
   const [oneliner, setOneliner] = useState("");
+  const [founder, setFounder] = useState("");
+  const [founderHandle, setFounderHandle] = useState("");
   const [industry, setIndustry] = useState<string>("AI");
   const [vibe, setVibe] = useState<string>("Stanford Dropout");
   const [length, setLength] = useState<(typeof LENGTHS)[number]>("medium");
@@ -79,6 +81,8 @@ export default function LandingPage() {
           one_liner: oneliner.trim(),
           industry,
           founder_vibe: vibe,
+          founder: founder.trim(),
+          founder_handle: founderHandle.trim(),
           length,
           craziness: crazy,
           mode,
@@ -211,6 +215,26 @@ export default function LandingPage() {
               className="brutalist-input"
             />
           </Field>
+
+          {/* founder (optional — treated as ground truth by the researcher) */}
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Founder name (optional)">
+              <input
+                value={founder}
+                onChange={(e) => setFounder(e.target.value)}
+                placeholder="Ada Chen"
+                className="brutalist-input"
+              />
+            </Field>
+            <Field label="Founder X handle (optional)">
+              <input
+                value={founderHandle}
+                onChange={(e) => setFounderHandle(e.target.value)}
+                placeholder="@adachen"
+                className="brutalist-input"
+              />
+            </Field>
+          </div>
 
           {/* industry */}
           <Field label="Industry">
