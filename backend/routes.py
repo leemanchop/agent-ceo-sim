@@ -177,6 +177,12 @@ def install_routes(api: Any) -> None:  # api: FastAPI
         # payload.user_id or payload.settings.user_id — both shapes are
         # accepted for forward-compat with the auth-agent's PR.
         state = create_run(payload)
+        try:
+            run_store.record_submission(
+                state.run_id, state.company_input, state.mode,
+            )
+        except Exception:
+            pass
         return {
             "run_id": state.run_id,
             "status": state.status,
@@ -200,6 +206,31 @@ def install_routes(api: Any) -> None:  # api: FastAPI
         if not state:
             raise HTTPException(404, "run not found")
         return state.snapshot()
+
+    # TODO: gate behind admin auth before public launch (same as /usage).
+    @api.get("/admin/submissions")
+    async def admin_submissions(format: str = "json", limit: int = 5000):
+        """Owner lead-capture export: every company/founder/handle players
+        have submitted. ?format=csv downloads a spreadsheet-ready file."""
+        rows = run_store.list_submissions(limit=limit)
+        if format != "csv":
+            return {"count": len(rows), "submissions": rows}
+        import csv
+        import io
+        buf = io.StringIO()
+        cols = ["ts", "run_id", "mode", "company_name", "one_liner",
+                "industry", "founder_vibe", "founder", "founder_handle"]
+        w = csv.DictWriter(buf, fieldnames=cols)
+        w.writeheader()
+        for r in rows:
+            w.writerow(r)
+        from fastapi.responses import Response
+        return Response(
+            content=buf.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition":
+                     "attachment; filename=30u30-submissions.csv"},
+        )
 
     # TODO: gate behind admin auth before public launch (same as /usage).
     @api.get("/run/{run_id}/script")

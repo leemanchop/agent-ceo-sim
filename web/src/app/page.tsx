@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { UserMenu } from "@/components/system/user-menu";
 import { markGuest } from "@/lib/user/local-runs";
 
 const INDUSTRIES = ["SaaS", "AI", "Fintech", "Bio", "Crypto", "DTC", "Other"];
@@ -120,12 +119,7 @@ export default function LandingPage() {
         >
           FORBES · 30u30 SIMULATOR
         </div>
-        <nav className="flex items-center gap-2">
-          <a href="/about" className="pill" style={{ cursor: "pointer" }}>about</a>
-          <a href="/archive" className="pill" style={{ cursor: "pointer" }}>archive</a>
-          <a href="/me/runs" className="pill" style={{ cursor: "pointer" }}>my runs</a>
-          <UserMenu />
-        </nav>
+        {/* nav pills removed (owner call) — pages remain reachable by URL */}
       </header>
 
       <div className="max-w-3xl mx-auto px-6 py-12">
