@@ -456,10 +456,17 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                             "tags": event_card.get("tags", []),
                         })
                         atms = oracle_out.get("atmospheric") or []
+                        _mini_idx = 0
                         for atm in (atms if isinstance(atms, list) else []):
                             if not isinstance(atm, dict):
                                 continue  # model emitted a bare string beat
+                            _mini_idx += 1
                             yield sse("turn.mini", {
+                                # Stable per-(turn, index) id — the frontend
+                                # dedupes timeline rows on it, so SSE
+                                # re-delivery after a reconnect no longer
+                                # duplicates mini rows (UX-8).
+                                "mini_id": f"mini-{state.turn}-{_mini_idx}",
                                 "kind": atm.get("kind", "atmospheric"),
                                 "headline": _resolve_slots(atm.get("headline", ""), slots, state.run_id),
                                 "stat_deltas": atm.get("stat_deltas", {}),

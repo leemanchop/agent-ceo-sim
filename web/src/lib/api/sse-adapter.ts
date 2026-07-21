@@ -252,7 +252,7 @@ export function miniFromTurnMini(
     tone: v > 0 ? "bad" : v < 0 ? "good" : "neutral",
   }));
   return {
-    id: `mini-${p.kind}-${Date.now()}`,
+    id: p.mini_id ?? `mini-${p.kind}-${Date.now()}`,
     size: "small",
     category: normalizeCategory(p.category),
     timeframe: (p.timeframe as TimeFrame) ?? "short",

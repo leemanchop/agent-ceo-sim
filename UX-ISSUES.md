@@ -170,9 +170,16 @@ Reported by Nathan playing real-LLM runs locally (2026-07-20).
 
 > "the run timeline always creates a duplicate log"
 
-- Diagnosis: (in progress — frontend investigator running)
-- Severity: high (also inflates the perceived event repetition)
-- Status: diagnosing
+- Diagnosis: mini-action timeline rows are deduped by an id minted as
+  `mini-${kind}-${Date.now()}` in the SSE adapter — every wire re-delivery
+  (EventSource auto-reconnect; the backend keeps no Last-Event-ID) gets a
+  fresh timestamp, so the dedup guard never matches and the row appends
+  again. Large-event rows key on the stable backend event_id and never
+  duplicated.
+- Fix: backend emits a stable `mini_id` (turn + index) on every turn.mini;
+  the adapter prefers it; the existing dedup guard now works.
+- Severity: high (also inflated the perceived event repetition)
+- Status: fixed — pending live re-test
 
 ## UX-9 — Valuation makes no sense ("randomly shows 1.0B without context")
 

@@ -174,6 +174,7 @@ export const FeedGlassdoorSchema = z.object({
 });
 
 export const TurnMiniSchema = z.object({
+  mini_id: z.string().nullable().optional(),
   kind: z.string(),
   headline: z.string(),
   stat_deltas: z.record(z.number()).default({}),
