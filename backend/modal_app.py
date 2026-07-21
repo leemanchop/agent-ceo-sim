@@ -114,7 +114,17 @@ def _build_fastapi():
             ach_status = achievement_engine.engine_status()
         except Exception:
             pass
-        return {"ok": True, "achievement_engine": ach_status}
+        # Scripted-engine availability — surfaces the guarded-import failure
+        # mode (routes falls back to the live engine silently otherwise).
+        scripted: Dict[str, Any] = {"available": False}
+        try:
+            import showrunner  # type: ignore
+            import playback  # type: ignore
+            scripted = {"available": True}
+        except Exception as e:
+            scripted = {"available": False, "error": f"{type(e).__name__}: {e}"}
+        return {"ok": True, "achievement_engine": ach_status,
+                "scripted_engine": scripted}
 
     # TODO: gate behind admin auth before public launch.
     @fapi.get("/usage")

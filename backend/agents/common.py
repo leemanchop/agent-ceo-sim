@@ -35,6 +35,10 @@ MODEL_POST_MORTEM = "claude-sonnet-4-6"
 MODEL_CEO = "claude-haiku-4-5"
 MODEL_ORACLE = "claude-haiku-4-5"
 MODEL_EDITOR = "claude-haiku-4-5"
+# Showrunner (Phase 2 pregenerated scripts): writes a whole episode of prose
+# per call against code-owned numbers — Sonnet for quality; a handful of
+# calls per run keeps cost well under the old per-turn loop.
+MODEL_SHOWRUNNER = "claude-sonnet-4-6"
 
 
 # Hardcoded near the top of EVERY agent's system prompt. Per

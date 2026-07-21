@@ -43,6 +43,7 @@ class CorpusRecord:
     length_eligibility: List[str] = field(default_factory=list)
     prereqs: List[str] = field(default_factory=list)       # ALL must be active
     prereqs_any: List[str] = field(default_factory=list)   # at least ONE active
+    plants: List[str] = field(default_factory=list)        # seeds this event activates
     effects: Dict[str, int] = field(default_factory=dict)  # normalized authored deltas
 
 
@@ -83,6 +84,7 @@ _SEVERITY_RE = re.compile(r"^\s*-\s*severity:\s*(?P<sev>[SMLX]+)", re.MULTILINE)
 _LEN_ELIG_RE = re.compile(r"^\s*-\s*length_eligibility:\s*\[(?P<le>[^\]]*)\]", re.MULTILINE)
 _PREREQS_RE = re.compile(r"^\s*-\s*prereqs:\s*\[(?P<p>[^\]]*)\]", re.MULTILINE)
 _PREREQS_ANY_RE = re.compile(r"^\s*-\s*prereqs_any:\s*\[(?P<p>[^\]]*)\]", re.MULTILINE)
+_PLANTS_RE = re.compile(r"^\s*-\s*plants:\s*\[(?P<p>[^\]]*)\]", re.MULTILINE)
 _EFFECTS_RE = re.compile(r"^\s*-\s*effects:\s*\{(?P<fx>[^}]*)\}", re.MULTILINE)
 
 
@@ -164,6 +166,9 @@ def _split_records(text: str, source_file: str) -> List[CorpusRecord]:
         pam = _PREREQS_ANY_RE.search(body)
         if pam:
             rec.prereqs_any = [t.strip().strip(",") for t in pam.group("p").split(",") if t.strip()]
+        plm = _PLANTS_RE.search(body)
+        if plm:
+            rec.plants = [t.strip().strip(",") for t in plm.group("p").split(",") if t.strip()]
         fm = _EFFECTS_RE.search(body)
         if fm:
             rec.effects = _normalize_effects(fm.group("fx"))
