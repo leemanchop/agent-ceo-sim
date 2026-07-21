@@ -149,7 +149,10 @@ def _build_fastapi():
     # immediately after POST /run/create on a different replica. For the
     # hackathon's traffic this is fine — multi-replica scale-out comes later
     # via a real backing store (Postgres + Redis pubsub).
-    min_containers=1,
+    # min_containers=0: spin down when idle (solo-dev / free-tier friendly —
+    # a pinned warm container eats ~$15-30/mo of credits). Cold start ~5s.
+    # max_containers=1 stays: in-memory run state requires a single replica.
+    min_containers=0,
     max_containers=1,
 )
 # Each ASGI container handles many concurrent SSE connections. Bump the
