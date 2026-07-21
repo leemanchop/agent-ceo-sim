@@ -347,6 +347,46 @@ def _resolve_effects(effects: Dict[str, int], running: Dict[str, int]) -> Dict[s
     return {k: v for k, v in out.items() if v}
 
 
+
+# Money-effect plausibility caps, mirroring routes._clamp_deltas philosophy:
+# corpus effects were authored at wildly different company scales (a -\$200M
+# valuation event written for unicorns zeroes a \$14M seed company). Ordinary
+# beats move money stats by tens of percent; XL / fundraising-tagged beats
+# may move them by multiples. Absolute floors keep small stats movable.
+_BIG_SWING_TAGS = {
+    "fundraising", "term_sheet", "funding_round", "down_round", "acquisition",
+    "ipo", "bank_run", "wipeout", "valuation", "capital",
+}
+_CAPS = {
+    #  key        (lo, hi)  ordinary   (lo, hi) big-swing   abs floor
+    "valuation": ((-0.40, 0.40), (-0.90, 3.0), 5_000_000),
+    "cash":      ((-0.50, 1.00), (-1.00, 10.0), 1_000_000),
+    "revenue":   ((-0.30, 0.30), (-1.00, 2.0), 200_000),
+    "burn":      ((-0.50, 0.50), (-1.00, 1.0), 100_000),
+    "headcount": ((-0.50, 0.50), (-0.90, 2.0), 5),
+}
+
+
+def _cap_beat_deltas(deltas: Dict[str, int], running: Dict[str, int],
+                     severity: str, tags: List[str]) -> Dict[str, int]:
+    big = severity == "XL" or bool(
+        {str(t).lower().lstrip("#") for t in (tags or [])} & _BIG_SWING_TAGS
+    )
+    out = dict(deltas)
+    for key, ((lo_m, hi_m), (lo_b, hi_b), floor_abs) in _CAPS.items():
+        if key not in out:
+            continue
+        cur = int(running.get(key, 0))
+        lo_mult, hi_mult = (lo_b, hi_b) if big else (lo_m, hi_m)
+        # Floor widens the UPWARD bound only (a zero stat can still grow).
+        # Widening the downward bound let a -\$5M floor nuke small companies
+        # to \$0 in a few beats (observed: turns 7-12 pinned at zero).
+        lo = int(cur * lo_mult)
+        hi = max(int(cur * hi_mult), floor_abs)
+        out[key] = max(lo, min(hi, int(out[key])))
+    return out
+
+
 def _pick_endgame(corpus: WorldCorpus, craziness: str, elig: str,
                   rng: random.Random) -> Optional[CorpusRecord]:
     weights = _ENDGAME_WEIGHTS.get(craziness, _ENDGAME_WEIGHTS["normal"])
@@ -460,6 +500,10 @@ def build_skeleton(state: RunState, corpus: WorldCorpus) -> Dict[str, Any]:
 
     def commit(beat: Dict[str, Any], deltas: Dict[str, int]) -> None:
         """Apply the trajectory law: stats_after = running ⊕ deltas."""
+        deltas = _cap_beat_deltas(
+            deltas, running,
+            str(beat.get("severity") or "S"), beat.get("tags") or [],
+        )
         before_fbi = int(running.get("fbi_awareness", 0))
         after = run_script.apply_deltas_to_stats(running, deltas)
         beat["stats_deltas"] = dict(deltas)
@@ -472,10 +516,13 @@ def build_skeleton(state: RunState, corpus: WorldCorpus) -> Dict[str, Any]:
     def score(ev: CorpusRecord, pref: str, final_turn: bool) -> float:
         sc = 1.0
         tags = set(ev.tags or [])
+        # Tempered: 0.5 bonuses made two same-industry companies converge on
+        # near-identical skeletons (observed: 3-of-3 story overlap). Affinity
+        # should bias, not dominate.
         if ev.category in ind_cats or tags & ind_tags:
-            sc += 0.5
+            sc += 0.25
         if tags & vibe_tags:
-            sc += 0.5
+            sc += 0.25
         sc += 0.6 * sum(1 for s in _pays_off(ev) if s in planted)  # keep arcs alive
         if (ev.severity or "S") == pref:
             sc += 0.75
@@ -485,7 +532,13 @@ def build_skeleton(state: RunState, corpus: WorldCorpus) -> Dict[str, Any]:
 
     def weighted_pick(cands: List[CorpusRecord], pref: str,
                       final_turn: bool) -> CorpusRecord:
-        pairs = [(ev, score(ev, pref, final_turn) * rng.random()) for ev in cands]
+        # Efraimidis-Spirakis weighted sampling: key = u^(1/w). Far more
+        # cross-run churn than multiplying by uniform noise, while still
+        # respecting weights.
+        pairs = [
+            (ev, rng.random() ** (1.0 / max(score(ev, pref, final_turn), 0.05)))
+            for ev in cands
+        ]
         pairs.sort(key=lambda p: -p[1])
         return pairs[0][0]
 
@@ -733,6 +786,11 @@ ADAPT, NEVER COPY: each beat's inspiration skeleton is generic corpus text.
 Rewrite every specific for THIS company — product noun, customers, rivals,
 buzzwords from the bible. Generic corpus phrasing reaching the screen
 verbatim is a failure.
+
+VARY THE CEO'S MOVES: never reuse the same choice label wording across
+beats ("double down in public" once per run, max). Each beat's choices
+must be specific to THAT situation, and the CEO's picks should show a
+personality arc, not one repeated strategy.
 
 NUMBERS ARE LAW: every beat comes with the EXACT stats_deltas and
 stats_after it must land on. These are precomputed and immutable. Any figure

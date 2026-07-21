@@ -1088,7 +1088,8 @@ def _clamp_deltas(deltas: Dict[str, Any], stats, event_card: Dict[str, Any]) -> 
         if key != "headcount" and 0 < abs(iv) <= 100 and current >= 1000:
             iv = int(current * iv / 100)
         lo_m, hi_m = (lo_big, hi_big) if big else (lo_mult, hi_mult)
-        lo = min(int(current * lo_m), -floor_abs)
+        # Floor widens the UPWARD bound only — see showrunner._cap_beat_deltas.
+        lo = int(current * lo_m)
         hi = max(int(current * hi_m), floor_abs)
         deltas[key] = max(lo, min(hi, iv))
 
@@ -1372,16 +1373,21 @@ def _apply_bible_to_initial_stats(state) -> None:
     p = presets.get(stage, presets["seed"])
 
     def _researched(field: str):
-        """Researcher-grounded value: int when the bible carries the field
-        (0 = 'couldn't find it' per UX-1 — surfaced as 0, not a fake preset);
-        None when the field is absent entirely (pre-UX-1 bibles, templates)."""
+        """Researcher-grounded value, or None to fall back to the stage
+        preset. 0 means 'couldn't find it' (UX-1) — for revenue that's a
+        real answer (pre-revenue company); for valuation/headcount a 0
+        renders the whole dashboard dead (observed: a \$0-valuation story
+        arc), so 0 falls back to the preset there."""
         v = company.get(field)
         if v is None:
             return None
         try:
-            return max(0, int(v))
+            iv = max(0, int(v))
         except (TypeError, ValueError):
             return None
+        if iv == 0 and field in ("estimated_valuation_usd", "headcount"):
+            return None
+        return iv
 
     rv = _researched("estimated_valuation_usd")
     rh = _researched("headcount")
