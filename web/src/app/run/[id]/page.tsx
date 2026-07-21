@@ -22,8 +22,9 @@ export default function RunPage() {
   const search = useSearchParams();
   const runId = (params?.id ?? "demo").toString();
   const replayMode = search.get("replay") === "1";
-  const queriedMode = (search.get("mode") as Mode) ?? "spectate";
-  const mode: Mode = replayMode ? "spectate" : queriedMode;
+  // Be-the-CEO mode retired (owner call, Phase 2): the scripted engine is
+  // spectate-only and coherence-first. Old ?mode=ceo links force-spectate.
+  const mode: Mode = "spectate";
 
   // ── achievement toast queue (real SSE-driven; was previously mocked) ──
   const achievementQueue = useAchievementQueue();
@@ -298,11 +299,8 @@ export default function RunPage() {
             </span>
           ) : (
             <>
-              <span
-                className={`pill ${mode === "ceo" ? "alarm solid" : "solid"}`}
-                style={{ fontSize: 10 }}
-              >
-                {mode === "spectate" ? "SPECTATE" : "YOU · CEO"}
+              <span className="pill solid" style={{ fontSize: 10 }}>
+                SPECTATE
               </span>
               <span className="pill alarm" style={{ fontSize: 10 }}>
                 ● LIVE

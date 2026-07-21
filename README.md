@@ -35,12 +35,13 @@ CI runs `npm run test` (frontend Vitest) and `node scripts/validate-corpus.mjs` 
 
 ## What's built
 
-### Two play modes
+### Play mode
 
 - **Spectate** — watch the LLM CEO agent decide. You predict its choice from chips during the deliberation/awaiting window; the outcome only reveals after you commit, then the prediction is graded. Score is tracked across the run.
-- **Be the CEO** — you make the calls. After you commit, the agent's "what I would have done" reasoning streams (educational beat).
 
-Selectable on the landing page. Mode badge persists in the run header.
+(A second "Be the CEO" mode existed pre-Phase-2; it was retired when runs
+moved to the pregenerated script engine, which is spectate-only. The live
+turn engine that powered it remains as the `ACES_SCRIPTED=0` fallback.)
 
 **Example (Spectate):** Tiger Global emails a $400M Series B at $4B post; term sheet expires in 6 hours; due diligence is one Zoom call. Three chips appear — *sign immediately / counter at $5B / pass*. The CEO's deliberation stream starts: *"signing's the obvious play but —"*. You predict `sign immediately`. The agent commits: `sign immediately`. ✓ correct. Stats jump (`+$400M valuation`, `+$2M burn`, `+5 fraud_score`), the Twitter chorus reacts, next event materializes.
 
