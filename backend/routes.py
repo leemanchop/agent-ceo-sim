@@ -927,6 +927,11 @@ def _clamp_deltas(deltas: Dict[str, Any], stats, event_card: Dict[str, Any]) -> 
         if iv is None:
             deltas.pop(key, None)
             return
+        # Corpus/model convention: tiny magnitudes on money stats are
+        # percents, not dollars ("valuation: -40" means -40%, and a -$40
+        # delta is meaningless anyway). Scale them before capping.
+        if key != "headcount" and 0 < abs(iv) <= 100 and current >= 1000:
+            iv = int(current * iv / 100)
         lo_m, hi_m = (lo_big, hi_big) if big else (lo_mult, hi_mult)
         lo = min(int(current * lo_m), -floor_abs)
         hi = max(int(current * hi_m), floor_abs)
