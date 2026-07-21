@@ -88,7 +88,20 @@ def install_routes(api: Any) -> None:  # api: FastAPI
             except Exception:
                 traceback.print_exc()
             finally:
+                state._script_inflight = False  # type: ignore[attr-defined]
                 await q.put(("__done__", None))
+
+        # Reconnect-safety (same disease as the researcher double-billing):
+        # a generation is already running for this run — wait on it instead
+        # of spawning a second Sonnet episode writer.
+        if getattr(state, "_script_inflight", False):
+            for _ in range(240):
+                await asyncio.sleep(2.0)
+                if state.script or not getattr(state, "_script_inflight", False):
+                    return
+                yield ": ping\n\n"
+            return
+        state._script_inflight = True  # type: ignore[attr-defined]
 
         task = asyncio.create_task(runner())
         try:
@@ -187,6 +200,17 @@ def install_routes(api: Any) -> None:  # api: FastAPI
         if not state:
             raise HTTPException(404, "run not found")
         return state.snapshot()
+
+    # TODO: gate behind admin auth before public launch (same as /usage).
+    @api.get("/run/{run_id}/script")
+    async def run_script_dump(run_id: str):
+        """Debug/admin: the full pregenerated RunScript (Phase 2)."""
+        state = get_run(run_id)
+        if not state:
+            raise HTTPException(404, "run not found")
+        if not state.script:
+            raise HTTPException(404, "run has no script (live-engine run?)")
+        return {"script": state.script, "cursor": state.script_cursor}
 
     @api.get("/run/{run_id}/bible")
     async def run_bible(run_id: str):
@@ -312,7 +336,9 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                     state.bible_yaml_raw = json.dumps(bible, indent=2)
                     _apply_bible_to_initial_stats(state)
                     persist_run(state.run_id)
-                    if _scripted_enabled(state) and not state.script:
+                    if _scripted_enabled(state) and not state.script \
+                            and not getattr(state, "_script_inflight", False):
+                        state._script_inflight = True  # type: ignore[attr-defined]
                         async def _fwd(kind: str, data: Dict[str, Any]) -> None:
                             if kind == "script.progress":
                                 d = data or {}
@@ -332,6 +358,8 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                             persist_run(state.run_id)
                         except Exception:
                             traceback.print_exc()  # fall back to live engine
+                        finally:
+                            state._script_inflight = False  # type: ignore[attr-defined]
                     state.status = "streaming"
                     await queue.put(("stream.open", {
                         "version": "1.0.0",
