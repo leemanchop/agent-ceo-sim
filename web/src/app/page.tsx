@@ -217,7 +217,7 @@ export default function LandingPage() {
           </Field>
 
           {/* founder (optional — treated as ground truth by the researcher) */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-3 items-start mt-4 [&>label]:mt-0">
             <Field label="Founder name (optional)">
               <input
                 value={founder}

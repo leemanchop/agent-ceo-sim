@@ -243,3 +243,18 @@ Reported by Nathan playing real-LLM runs locally (2026-07-20).
   real-person handles) per owner's either/or.
 - Severity: high
 - Status: fixed — pending live re-test
+
+## UX-13 — Blank founder-tweet box; misaligned founder fields on setup
+
+> "every time the agent makes a decision, the founder tweet box pops up at
+> the bottom even if it's blank, which probably shouldn't be the case. also
+> in the setup page the founder name and founder twitter urls are misaligned"
+
+- Diagnosis: (1) the tweet artifact card rendered on phase alone —
+  no check that artifact_tweet is non-empty; (2) the Field component
+  adds mt-4 via `first:mt-0` to all-but-first children — inside the
+  founder two-column grid row that pushed only the right column down.
+- Fix: tweet card gated on a non-empty artifact; grid row neutralizes
+  the Field margin (`[&>label]:mt-0`) and top-aligns items.
+- Severity: low
+- Status: fixed — pending live re-test

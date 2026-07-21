@@ -675,8 +675,10 @@ export function AgentStream({
                   {event?.justification}
                 </div>
 
-                {/* tweet artifact card — X styling */}
-                {(phase === "consequences" || phase === "advancing") && (
+                {/* tweet artifact card — X styling; hidden when the CEO
+                    didn't tweet this turn (empty artifact) */}
+                {(phase === "consequences" || phase === "advancing") &&
+                  !!event?.artifact_tweet?.trim() && (
                   <div
                     className="mt-4 max-w-md font-x animate-event-in"
                     style={{
