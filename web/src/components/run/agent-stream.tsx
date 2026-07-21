@@ -234,13 +234,13 @@ export function AgentStream({
               style={{ fontSize: 13, color: "var(--soft)", lineHeight: 1.5 }}
             >
               {templateId
-                ? "no web research happens for presets. the historical record is hand-authored."
-                : "landing page, founder posts, recent press, podcast appearances. ~30-90 seconds. don't close the tab."}
+                ? "loading the hand-authored record, then the showrunner scripts episode one. about a minute."
+                : "landing page, founder posts, recent press — then the showrunner scripts episode one. usually 2–4 minutes. don't close the tab."}
             </div>
-            {/* Researcher log — visible scrolling list of every step the
-                Researcher emits. Only populated for uploaded runs (real
-                research); template runs collapse to a single fast beat. */}
-            {!templateId && researchLog && researchLog.length > 0 && (
+            {/* Live log — visible from second zero so the wait never looks
+                dead. Researcher steps AND showrunner episode progress both
+                land here (templates skip research but still script). */}
+            {(
               <div
                 className="font-mono mt-2 w-full animate-event-in"
                 style={{
@@ -263,10 +263,23 @@ export function AgentStream({
                     letterSpacing: "0.12em",
                   }}
                 >
-                  ▌ RESEARCHER · LIVE LOG
+                  ▌ LIVE LOG
                 </div>
-                {researchLog.map((entry, i) => {
-                  const isLast = i === researchLog.length - 1;
+                {(!researchLog || researchLog.length === 0) && (
+                  <div
+                    style={{
+                      borderLeft: "2px solid var(--alarm)",
+                      paddingLeft: 8,
+                      marginBottom: 3,
+                    }}
+                  >
+                    <span className="text-soft">system ›</span> connecting to
+                    the researcher…
+                    <span className="animate-blink ml-1">▌</span>
+                  </div>
+                )}
+                {(researchLog ?? []).map((entry, i) => {
+                  const isLast = i === (researchLog ?? []).length - 1;
                   return (
                     <div
                       key={`${entry.ts}-${i}`}
@@ -293,24 +306,6 @@ export function AgentStream({
                     </div>
                   );
                 })}
-              </div>
-            )}
-            {/* Compact single-line for template runs (no real research) */}
-            {templateId && researchProgress && (
-              <div
-                className="font-mono mt-2 animate-event-in"
-                style={{
-                  fontSize: 12,
-                  color: "var(--ink-2)",
-                  borderLeft: "2px solid var(--alarm)",
-                  paddingLeft: 10,
-                  paddingTop: 4,
-                  paddingBottom: 4,
-                }}
-              >
-                <span className="text-soft">researcher ›</span>{" "}
-                {researchProgress.step}
-                <span className="animate-blink ml-1">▌</span>
               </div>
             )}
             <div
