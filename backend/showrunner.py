@@ -448,6 +448,23 @@ def _new_beat(kind: str, turn: int, episode: int) -> Dict[str, Any]:
     }
 
 
+
+# The CEO's picks were converging on one strategy label ("double down in
+# public" x5 observed) — prompt-only variety rules didn't stick. The
+# skeleton now scripts each large beat's pick TONE; the prose pass must
+# make ceo_choice match it, which forces varied strategies by structure.
+_PICK_TONE_CYCLE = ["based", "unhinged", "midwit", "unhinged", "based", "rare-cucked"]
+
+
+def _next_pick_tone(beat: Dict[str, Any], rng: "random.Random") -> str:
+    tones = {c.get("tone") for c in (beat.get("choices") or []) if c.get("tone")}
+    turn = int(beat.get("turn") or 1)
+    want = _PICK_TONE_CYCLE[(turn - 1 + rng.randint(0, 1)) % len(_PICK_TONE_CYCLE)]
+    if want in tones:
+        return want
+    return next(iter(sorted(tones)), "based")
+
+
 def build_skeleton(state: RunState, corpus: WorldCorpus) -> Dict[str, Any]:
     """Pure + deterministic: same run_id → same skeleton. NO LLM calls."""
     rng = random.Random(state.run_id)
@@ -616,6 +633,7 @@ def build_skeleton(state: RunState, corpus: WorldCorpus) -> Dict[str, Any]:
             beat["tags"] = list(rec.tags or [])
             beat["_src"] = {"title": rec.title, "body": _record_prose(rec)}
             beat["choices"] = _extract_choices(rec) or _skeleton_choices()
+            beat["ceo_pick_tone"] = _next_pick_tone(beat, rng)
             plants = [p for p in (rec.plants or []) if isinstance(p, str)]
             pays = [p for p in _pays_off(rec) if p in planted]
             beat["seeds_planted"] = plants
@@ -638,11 +656,12 @@ def build_skeleton(state: RunState, corpus: WorldCorpus) -> Dict[str, Any]:
                 "body": "The company has a week nobody planned for. The chorus notices.",
             }
             beat["choices"] = _skeleton_choices()
+            beat["ceo_pick_tone"] = _next_pick_tone(beat, rng)
             deltas = _default_deltas(severity, running, rng, late)
 
         lo, hi = _DAY_STEP.get(beat["severity"], (5, 10))
         deltas["day"] = rng.randint(lo, hi)
-        beat["ceo_choice"] = beat["choices"][0]["id"]
+        beat["ceo_choice"] = _tone_pick(beat)
         commit(beat, deltas)
         last_cats.append(beat["category"])
         return beat
@@ -701,7 +720,7 @@ def repair_script(script: Dict[str, Any], corpus: Optional[WorldCorpus] = None) 
             b["choices"] = choices
             ids = [c.get("id") for c in choices]
             if b.get("ceo_choice") not in ids:
-                b["ceo_choice"] = ids[0]
+                b["ceo_choice"] = _tone_pick(b)
 
     running = dict(script.get("initial_stats") or {})
     for b in beats:
@@ -870,7 +889,7 @@ SHOWRUNNER_TOOL: Dict[str, Any] = {
                             },
                             "description": "Large beats only. Keep the skeleton ids/tones; write short labels.",
                         },
-                        "ceo_choice": {"type": "string", "description": "Large beats only — one of the skeleton choice ids."},
+                        "ceo_choice": {"type": "string", "description": "Large beats only — the choice id whose tone matches this beat's CEO PICK DIRECTIVE."},
                         "ceo_reasoning": {"type": "string", "description": "Large beats only — 40-70 tokens, lowercase CEO voice."},
                         "justification": {"type": "string", "description": "Large beats only — one line, CEO voice."},
                         "artifact_tweet": {"type": ["string", "null"], "description": "Founder tweet, or null (most beats null)."},
@@ -899,6 +918,17 @@ SHOWRUNNER_TOOL: Dict[str, Any] = {
         },
     },
 }
+
+
+
+def _tone_pick(beat: Dict[str, Any]) -> str:
+    """Choice id matching the beat's scripted pick tone (first id fallback)."""
+    want = beat.get("ceo_pick_tone")
+    for c in beat.get("choices") or []:
+        if c.get("tone") == want and c.get("id"):
+            return c["id"]
+    ch = beat.get("choices") or []
+    return (ch[0].get("id") if ch and isinstance(ch[0], dict) else None) or "A"
 
 
 def _beat_ref(beat: Dict[str, Any]) -> str:
@@ -931,6 +961,12 @@ def _beat_prompt_block(beat: Dict[str, Any]) -> str:
         )
         lines.append("choices (KEEP ids+tones, rewrite labels for this company; "
                      "empty sketch = invent one matching the tone): %s" % ch)
+        lines.append(
+            "CEO PICK DIRECTIVE: ceo_choice MUST be the choice whose tone == %r "
+            "(the scripted personality move for this beat). Every beat's picked "
+            "label must use DIFFERENT wording from every other beat's — no "
+            "repeated strategy labels." % (beat.get("ceo_pick_tone") or "based")
+        )
     else:
         lines.append("mini beat — return title(=headline), body(one deadpan "
                      "line), outcome(one-line resolution).")
