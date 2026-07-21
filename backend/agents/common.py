@@ -22,9 +22,12 @@
 #     route-level retry-with-backoff cap.
 # Researcher was the last agent on Opus — at ~50-90K input tokens per
 # custom run (web_search results) it alone cost ~$1.24/run, ~85% of a
-# custom run's total. Sonnet holds up well for companies with a real web
-# footprint; obscure ones fall back to synthetic either way.
+# custom run's total. Sonnet runs first; when its dossier scores below
+# the quality bar (see researcher._bible_quality), the run escalates to
+# the deep model automatically — so well-covered companies stay ~$0.30
+# and only thin-footprint ones pay for Opus.
 MODEL_RESEARCHER = "claude-sonnet-4-6"
+MODEL_RESEARCHER_DEEP = "claude-opus-4-7"
 # Post-mortem is the shareable narrative finale — quality matters, but Opus
 # was ~half the cost of an entire run for one call. Sonnet keeps the prose
 # quality while cutting that ~5x (see usage_tracker._PRICING).
