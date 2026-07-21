@@ -158,6 +158,8 @@ export type SsePayloadByKind = {
     ts: string;
   };
   "turn.mini": {
+    /** Stable per-(turn, index) id from the backend — timeline dedup key. */
+    mini_id?: string | null;
     kind: string;
     headline: string;
     stat_deltas?: Record<string, number>;
