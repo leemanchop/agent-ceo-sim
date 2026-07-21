@@ -346,7 +346,9 @@ export default function RunPage() {
       <Dashboard stats={stats} deltas={deltas} speed={speed} />
 
       {/* desktop: 3-column */}
-      <div className="hidden md:grid flex-1 min-h-0 grid-cols-[220px_1fr_360px]">
+      {/* Timeline column = exactly one stat-strip cell (1/7) so its right
+          border lands on the DAY | VALUATION divider at every width. */}
+      <div className="hidden md:grid flex-1 min-h-0 grid-cols-[calc(100%/7)_1fr_360px]">
         <div
           className="border-r border-ink min-h-0 overflow-hidden"
           style={{ borderRightWidth: "1.4px" }}

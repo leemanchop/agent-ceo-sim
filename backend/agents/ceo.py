@@ -72,8 +72,9 @@ register the Editor will reject your output and you'll get re-prompted):
 PER TURN, YOU PRODUCE:
 
 1) HIDDEN REASONING (visible to user but in-fiction your private thought):
-   80-150 tokens, lowercase, em-dashes, your voice. Reason through the choices
-   the way you'd DM your cofounder, not write a board memo.
+   40-70 tokens, TWO SHORT LINES MAX — the user reads this inside a
+   30-second prediction window. Lowercase, em-dashes, your voice. The gut
+   take you'd DM your cofounder, not the full deliberation.
 
 2) COMMIT to exactly one choice from the list. State it: "doing: <choice_id>"
    followed by a one-line justification in your voice.
@@ -112,8 +113,10 @@ def _build_system(bible: Dict[str, Any]) -> str:
     primary = founders[0] if founders else {}
     industry = company.get("industry", "ai_app")
     stage = company.get("funding_stage", "seed")
-    founder_name = primary.get("name", "[Founder]")
-    company_name = company.get("display_name") or company.get("name", "[Company]")
+    # Never default to bracket placeholders — they read as bugs when they
+    # leak into generated text (UX-6).
+    founder_name = primary.get("name") or "The Founder"
+    company_name = company.get("display_name") or company.get("name") or "the company"
     base = SYSTEM_PROMPT_TEMPLATE
     base = base.replace("[FOUNDER]", founder_name)
     base = base.replace("[COMPANY]", company_name)
@@ -145,7 +148,7 @@ CHOICES — pick exactly one, by id:
 {json.dumps(event_card.get('choices', []), indent=2)}
 
 Produce strict JSON per the schema in your system prompt. No code fence.
-Reasoning first (80-150 tokens, your voice), then commit, then artifacts.
+Reasoning first (40-70 tokens, two short lines max), then commit, then artifacts.
 """
 
 
@@ -154,7 +157,7 @@ def _recap(state: RunState, k: int) -> str:
         return "(this is turn 1)"
     return "\n".join(
         f"T{t.turn} | {t.event_title} | picked={t.agent_choice_id} | "
-        f"\"{t.justification[:80]}\""
+        f"\"{str(t.justification or '')[:80]}\""
         for t in state.turns[-k:]
     )
 
@@ -254,7 +257,9 @@ async def stream_ceo(
         agent="ceo",
         model=MODEL_CEO,
         max_tokens=700,  # CEO output is reasoning + choice + justification + 1 tweet — 700 is plenty
-        system=system,
+        # System prompt is static within a run (bible slot-fills don't change),
+        # so cache it — saves re-processing it on every turn's call.
+        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": user}],
     ) as stream:
         for event in stream:
@@ -286,16 +291,24 @@ async def stream_ceo(
                 await asyncio.sleep(0.02)
                 i += 8
     if parsed is None:
-        # Fallback so the run doesn't stall.
-        choices = event_card.get("choices") or [{"id": "A"}]
+        # Fallback so the run doesn't stall. Choices are LLM-authored
+        # (Oracle) — tolerate non-dict items so the fallback itself can't
+        # raise while handling a malformed card.
+        choices = [
+            c for c in (event_card.get("choices") or []) if isinstance(c, dict)
+        ]
         parsed = {
             "reasoning": full_text or "thinking — going with the obvious play",
-            "choice_id": choices[0].get("id", "A"),
+            "choice_id": (choices[0].get("id") if choices else None) or "A",
             "justification": "obvious play",
             "artifacts": {"tweet": "we ship", "slack": None, "board_email": None},
         }
     # Clamp to a real choice if the model hallucinated.
-    valid_ids = {c.get("id") for c in event_card.get("choices") or []}
+    valid_ids = {
+        c.get("id") for c in (event_card.get("choices") or [])
+        if isinstance(c, dict)
+    }
+    valid_ids.discard(None)
     if parsed.get("choice_id") not in valid_ids and valid_ids:
         parsed["choice_id"] = next(iter(valid_ids))
     return parsed

@@ -1690,6 +1690,26 @@ Parody-account variant for the Zitron-school doom-newsletter voice.
 
 The SF-civics-cheerleader parody account. Cameos in any beat tagged SF political discourse.
 
+### FIG-CHORUS-021 — @BasedBeffJezos
+- type: real_person
+- domain_tags: [twitter_chorus, eacc, ai_discourse]
+- voice: e/acc thermodynamic-optimism, "accelerate", dunks on doomers and regulation, physics-bro register
+- typical_beats: [reacts to AI-company beats with "build faster" framing, quote-dunks any safety/regulator event, "the market is the alignment mechanism" take]
+- defamation_class: safe_reaction
+- slots_filled: [CHORUS_EACC_CYNIC]
+
+The e/acc chorus voice. Reacts-only: celebrates shipping, mocks caution — never makes factual claims about the user's company.
+
+### FIG-CHORUS-022 — @openspec
+- type: real_person
+- domain_tags: [twitter_chorus, engineer_cynic, anti_hype]
+- voice: dry engineer-cynic, lowercase, "show me the repo", allergic to demos and decks
+- typical_beats: [one-line dunk on any hardcoded-demo beat, "where's the benchmark" reply, quietly devastating quote-tweet of fundraising announcements]
+- defamation_class: safe_reaction
+- slots_filled: [CHORUS_ENGINEER_CYNIC]
+
+The show-me-the-code chorus voice. Reacts-only skepticism; pairs perfectly with wrapper-disclosure and demo-fraud beats.
+
 ### FIG-BOARD-007 — The Sovereign-Wealth Cousin Observer
 - type: archetype
 - domain_tags: [board_archetype, sovereign_wealth, family_office]

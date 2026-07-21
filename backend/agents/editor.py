@@ -80,6 +80,12 @@ YOUR JOB IS VOICE QUALITY, IN THIS ORDER:
 5) STATS CONSISTENCY:
    - Deltas come from declared event effects + CEO choice modifiers only.
 
+6) CANON DISCIPLINE:
+   - Fraud is EARNED, not presumed. If the narrator asserts as fact that
+     the product/revenue/demo is fake without the CEO having chosen that
+     path in the run history, flag it — the beat must be reframed as an
+     attributed accusation ("a thread claims…") or a temptation.
+
 You do NOT enforce optimism. Dark, cursed, sad runs are good runs.
 You do NOT soften the CEO. The agent is supposed to be a fraud.
 You do NOT insert disclaimers. Disclaimers live at share-card / footer level.
@@ -125,7 +131,9 @@ Review per the rubric. Output strict JSON. Default ship unless real failure.
         agent="editor",
         model=MODEL_EDITOR,
         max_tokens=300,  # editor returns a small JSON verdict — no need for room
-        system=SYSTEM_PROMPT,
+        # Editor system prompt is a static module constant — cache it so it
+        # isn't re-billed as fresh input tokens every turn.
+        system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": user_prompt}],
     )
     text = "".join(

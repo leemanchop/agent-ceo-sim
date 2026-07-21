@@ -6,9 +6,7 @@ import { Star } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const TABS = [
-  { id: "for-you", label: "For You", active: true, locked: false },
-  { id: "following", label: "Following", active: false, locked: false },
-  { id: "press", label: "Press", active: false, locked: false },
+  { id: "feed", label: "Feed", active: true, locked: false },
   { id: "fbi", label: "FBI 🔒", active: false, locked: true },
 ] as const;
 
@@ -19,7 +17,7 @@ export function LiveFeed({
   entries: FeedEntry[];
   speed?: 1 | 2 | 4;
 }) {
-  const [activeTab, setActiveTab] = useState<string>("for-you");
+  const [activeTab, setActiveTab] = useState<string>("feed");
 
   // The cockpit feeds `entries` incrementally — in live mode SSE pushes one
   // at a time; in mock mode the canned 30-entry list arrives at once and we
