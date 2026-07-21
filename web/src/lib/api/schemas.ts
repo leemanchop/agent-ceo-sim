@@ -66,6 +66,7 @@ export const EffectChipSchema = z.object({
   label: z.string(),
   value: z.string(),
   tone: z.enum(["good", "bad", "neutral"]),
+  why: z.string().nullable().optional(),
 });
 
 // ── per-event-kind SSE payloads ────────────────────────────────

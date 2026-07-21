@@ -800,33 +800,43 @@ export function useRun({
               : cur
           );
           // Drop a row onto the timeline now that the event resolved.
-          setLiveEvent((curEv) => {
-            if (!curEv) return curEv;
-            const choice = curEv.choices.find((c) => c.id === curEv.agent_choice_id);
-            setTimeline((prev) => {
-              const turnNum = prev.length + 1;
-              const dayNum = (prev[prev.length - 1]?.day ?? 0) + 14;
-              return [
-                ...prev,
-                {
-                  id: `t-${curEv.id}-${turnNum}`,
-                  turn: turnNum,
-                  day: dayNum,
-                  size: "large",
-                  category: curEv.category,
-                  severity: curEv.severity,
-                  title: curEv.title,
-                  outcome:
-                    (choice?.label ?? "—") + ". " + curEv.justification,
-                  alarm:
-                    curEv.severity === "XL" ||
-                    curEv.category === "REGULATORY" ||
-                    curEv.category === "FBI",
-                },
-              ];
-            });
-            return curEv;
-          });
+          // Read via ref — calling setTimeline inside a setLiveEvent updater
+          // made the updater impure, and React (dev StrictMode) re-runs
+          // impure updaters, which duplicated every timeline row (UX-8).
+          {
+            const curEv = liveEventRef.current;
+            if (curEv) {
+              const choice = curEv.choices.find(
+                (c) => c.id === curEv.agent_choice_id
+              );
+              setTimeline((prev) => {
+                // Idempotent: SSE replays / double-invokes must not dupe.
+                if (prev.some((r) => r.id.startsWith(`t-${curEv.id}-`))) {
+                  return prev;
+                }
+                const turnNum = prev.length + 1;
+                const dayNum = (prev[prev.length - 1]?.day ?? 0) + 14;
+                return [
+                  ...prev,
+                  {
+                    id: `t-${curEv.id}-${turnNum}`,
+                    turn: turnNum,
+                    day: dayNum,
+                    size: "large" as const,
+                    category: curEv.category,
+                    severity: curEv.severity,
+                    title: curEv.title,
+                    outcome:
+                      (choice?.label ?? "—") + ". " + curEv.justification,
+                    alarm:
+                      curEv.severity === "XL" ||
+                      curEv.category === "REGULATORY" ||
+                      curEv.category === "FBI",
+                  },
+                ];
+              });
+            }
+          }
           setPhase("consequences");
           // After ~4s the consequences animation has finished AND the user
           // has had time to see the reveal callout + agent pick. Then flip
@@ -842,6 +852,9 @@ export function useRun({
         },
         onMiniAction: (mini) => {
           setTimeline((prev) => {
+            if (prev.some((r) => r.id.startsWith(`tm-${mini.id}-`))) {
+              return prev;  // idempotent (UX-8)
+            }
             const turnNum = prev.length + 1;
             const dayNum = (prev[prev.length - 1]?.day ?? 0) + 2;
             return [

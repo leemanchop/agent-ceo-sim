@@ -649,6 +649,8 @@ def install_routes(api: Any) -> None:  # api: FastAPI
 
                         # ---- 5) Apply consequences ----
                         deltas = oracle_out.get("stats_deltas", {}) or {}
+                        if isinstance(deltas, dict):
+                            deltas = _clamp_deltas(dict(deltas), state.stats, event_card)
                         state.stats.apply(deltas)  # coerces junk values internally
                         fs = oracle_out.get("foreshadow_updates", {}) or {}
                         if not isinstance(fs, dict):
@@ -670,7 +672,9 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                         rec = TurnRecord(
                             turn=state.turn,
                             day=state.stats.day,
-                            event_id=event_card.get("id", f"EVT-{state.turn:03d}"),
+                            event_id=(event_card.get("source_event_id")
+                                      or event_card.get("id")
+                                      or f"EVT-{state.turn:03d}"),
                             event_title=event_card.get("title", ""),
                             event_body=event_card.get("body", ""),
                             severity=event_card.get("severity", "S"),
@@ -709,8 +713,27 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                                 "ts": _ts_now(),
                             })
 
+                        rationale = _as_str(oracle_out.get("stat_rationale")).strip()
+                        chips = []
+                        if isinstance(deltas, dict):
+                            for k, v in deltas.items():
+                                if k == "day" or not isinstance(v, int) or v == 0:
+                                    continue
+                                label = k.replace("_", " ")
+                                val = (f"{'+' if v > 0 else ''}{v/1_000_000:.1f}M"
+                                       if k in ("valuation", "cash", "revenue", "burn")
+                                       and abs(v) >= 1_000_000
+                                       else f"{'+' if v > 0 else ''}{v}")
+                                chips.append({
+                                    "label": label,
+                                    "value": val,
+                                    "tone": "bad" if (v < 0) == (k not in ("burn", "fbi_awareness", "fraud_score")) else "good",
+                                    **({"why": rationale} if rationale else {}),
+                                })
                         yield sse("consequences.applied", {
                             "stat_deltas": deltas,
+                            "effects_summary": chips,
+                            "stat_rationale": rationale,
                             "seeds_planted": rec.seeds_planted,
                             "seeds_paid_off": rec.seeds_paid_off,
                             "next_event_in_seconds": _gap_for_speed(state.speed),
@@ -866,6 +889,48 @@ def _last_ceo_commit_for_oracle(state):
         "justification": t.justification,
         "tweet": t.artifact_tweet,
     }
+
+
+
+# Relaxed-cap tags: events where big money swings are the point.
+_BIG_SWING_TAGS = {
+    "fundraising", "term_sheet", "funding_round", "down_round", "acquisition",
+    "ipo", "bank_run", "wipeout", "valuation", "capital",
+}
+
+
+def _clamp_deltas(deltas: Dict[str, Any], stats, event_card: Dict[str, Any]) -> Dict[str, int]:
+    """Plausibility caps on LLM-authored stat deltas (UX-9: '$1.0B out of
+    nowhere'). Proportional to current stats, severity- and tag-aware:
+    ordinary events move money stats by tens of percent; only XL or
+    fundraising/collapse-tagged events may move them by multiples. Absolute
+    floors keep zero-stats movable. reputation/fbi/fraud/day already clamp
+    in Stats.apply."""
+    if not isinstance(deltas, dict):
+        return {}
+    sev = (event_card.get("severity") or "S") if isinstance(event_card, dict) else "S"
+    tags = set(event_card.get("tags") or []) if isinstance(event_card, dict) else set()
+    big = sev == "XL" or bool({t.lower().lstrip("#") for t in tags if isinstance(t, str)} & _BIG_SWING_TAGS)
+
+    def cap(key: str, current: int, lo_mult: float, hi_mult: float,
+            lo_big: float, hi_big: float, floor_abs: int) -> None:
+        v = deltas.get(key)
+        from state import _coerce_delta  # local import; tiny helper
+        iv = _coerce_delta(v)
+        if iv is None:
+            deltas.pop(key, None)
+            return
+        lo_m, hi_m = (lo_big, hi_big) if big else (lo_mult, hi_mult)
+        lo = min(int(current * lo_m), -floor_abs)
+        hi = max(int(current * hi_m), floor_abs)
+        deltas[key] = max(lo, min(hi, iv))
+
+    cap("valuation", stats.valuation, -0.40, 0.40, -0.90, 3.0, 5_000_000)
+    cap("cash",      stats.cash,      -0.50, 1.00, -1.00, 10.0, 1_000_000)
+    cap("revenue",   stats.revenue,   -0.30, 0.30, -1.00, 2.0, 200_000)
+    cap("burn",      stats.burn,      -0.50, 0.50, -1.00, 1.0, 100_000)
+    cap("headcount", stats.headcount, -0.50, 0.50, -0.90, 2.0, 5)
+    return {k: v for k, v in deltas.items() if isinstance(v, (int, float)) or v is not None}
 
 
 def _slot_map(state) -> Dict[str, str]:
@@ -1054,8 +1119,8 @@ def _feed_event_kind(reaction: Dict[str, Any]) -> str:
 _CHORUS_FALLBACK = [
     ("@litcapital", "lit capital"),
     ("@AnonVCs", "Anonymous VC"),
-    ("@openspec", "openspec"),
-    ("@BasedBeffJezos", "Beff Jezos — e/acc"),
+    ("@readthecommit", "read the commit"),
+    ("@AccelDaemon", "Accel Daemon (e/acc)"),
     ("@founderhustleculture", "Founder Hustle Culture"),
     ("@AGIEnjoyer", "AGI Enjoyer"),
 ]

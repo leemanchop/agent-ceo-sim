@@ -749,6 +749,14 @@ export function AgentStream({
                         </span>
                       </span>
                     ))}
+                    {event.effects_summary.find((e) => e.why)?.why && (
+                      <span
+                        className="basis-full font-body"
+                        style={{ fontSize: 11, color: "var(--soft)" }}
+                      >
+                        — {event.effects_summary.find((e) => e.why)?.why}
+                      </span>
+                    )}
                   </div>
                 )}
               </div>

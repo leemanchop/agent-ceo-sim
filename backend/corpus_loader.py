@@ -43,6 +43,7 @@ class CorpusRecord:
     length_eligibility: List[str] = field(default_factory=list)
     prereqs: List[str] = field(default_factory=list)       # ALL must be active
     prereqs_any: List[str] = field(default_factory=list)   # at least ONE active
+    effects: Dict[str, int] = field(default_factory=dict)  # normalized authored deltas
 
 
 @dataclass
@@ -82,6 +83,45 @@ _SEVERITY_RE = re.compile(r"^\s*-\s*severity:\s*(?P<sev>[SMLX]+)", re.MULTILINE)
 _LEN_ELIG_RE = re.compile(r"^\s*-\s*length_eligibility:\s*\[(?P<le>[^\]]*)\]", re.MULTILINE)
 _PREREQS_RE = re.compile(r"^\s*-\s*prereqs:\s*\[(?P<p>[^\]]*)\]", re.MULTILINE)
 _PREREQS_ANY_RE = re.compile(r"^\s*-\s*prereqs_any:\s*\[(?P<p>[^\]]*)\]", re.MULTILINE)
+_EFFECTS_RE = re.compile(r"^\s*-\s*effects:\s*\{(?P<fx>[^}]*)\}", re.MULTILINE)
+
+
+def _normalize_effects(raw: str) -> Dict[str, int]:
+    """Parse and normalize an authored `effects: { k: v, ... }` block.
+
+    The corpus is unit-inconsistent: banking events use percent-like small
+    numbers (cash: -40 == -40%), hiring uses absolute USD (burn: +50_000).
+    Normalize per key so downstream consumers get comparable anchors:
+      - money keys: |v| <= 100 is percent-of-current (stored as f"{v}%"-less
+        int with the _PCT sentinel key suffix); |v| > 100 is absolute USD
+      - headcount: absolute count
+      - reputation / fbi_awareness / fraud_score: absolute points
+      - heat: folds into reputation as -heat (dashboard has no heat stat)
+      - morale / anything unknown: dropped
+    Percent values are expressed by suffixing the key with "_pct" so the
+    result stays a flat Dict[str, int]."""
+    out: Dict[str, int] = {}
+    for part in raw.split(","):
+        if ":" not in part:
+            continue
+        k, _, v = part.partition(":")
+        k = k.strip().strip("'\"")
+        v = v.strip().replace("_", "").replace("+", "")
+        try:
+            iv = int(float(v))
+        except ValueError:
+            continue
+        if k == "heat":
+            out["reputation"] = out.get("reputation", 0) - iv
+        elif k in ("valuation", "cash", "revenue", "burn"):
+            if abs(iv) <= 100:
+                out[k + "_pct"] = iv
+            else:
+                out[k] = iv
+        elif k in ("headcount", "reputation", "fbi_awareness", "fraud_score", "sec_aware"):
+            key = "fbi_awareness" if k == "sec_aware" else k
+            out[key] = out.get(key, 0) + iv
+    return out
 
 
 def _split_records(text: str, source_file: str) -> List[CorpusRecord]:
@@ -124,6 +164,9 @@ def _split_records(text: str, source_file: str) -> List[CorpusRecord]:
         pam = _PREREQS_ANY_RE.search(body)
         if pam:
             rec.prereqs_any = [t.strip().strip(",") for t in pam.group("p").split(",") if t.strip()]
+        fm = _EFFECTS_RE.search(body)
+        if fm:
+            rec.effects = _normalize_effects(fm.group("fx"))
         records.append(rec)
     return records
 

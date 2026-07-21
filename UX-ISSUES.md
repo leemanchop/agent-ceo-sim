@@ -165,3 +165,74 @@ Reported by Nathan playing real-LLM runs locally (2026-07-20).
 - Severity: high (storytelling premise + defamation posture for real
   uploaded companies)
 - Status: fixed — pending live re-test
+
+## UX-8 — Run timeline always creates a duplicate log
+
+> "the run timeline always creates a duplicate log"
+
+- Diagnosis: (in progress — frontend investigator running)
+- Severity: high (also inflates the perceived event repetition)
+- Status: diagnosing
+
+## UX-9 — Valuation makes no sense ("randomly shows 1.0B without context")
+
+> "the valuation never really makes a ton of sense - it will randomly show
+> 1.0B without any context given"
+> (ground truth: nologo.com run went $14M → $1,193,999,920 in 12 turns)
+
+- Diagnosis: stat deltas were 100% LLM-invented magnitudes with no bounds
+  (Stats.apply just adds); the authored `effects:` blocks on all 296
+  events were parsed nowhere; and the corpus is unit-inconsistent
+  (banking events use percents, hiring uses absolute USD). Bonus: the
+  server emitted the RAW delta in consequences.applied while applying a
+  clamped one — client dashboard drifted from server truth mid-turn.
+- Fix: effects parsed + unit-normalized per event (heat folds into
+  reputation; morale dropped); shortlist candidates now carry "AUTHORED
+  EFFECTS (anchor)" the Oracle must match in sign/magnitude; code-side
+  plausibility clamps (valuation ±40%/turn, ±3x only on XL/fundraising-
+  tagged events; proportional caps on cash/revenue/burn/headcount with
+  absolute floors); clamped deltas are what gets emitted; Oracle now
+  emits a one-line stat_rationale rendered under the RIPPLES chips.
+- Severity: high
+- Status: fixed — pending live re-test
+
+## UX-10 — Oracle events very repeated
+
+> "the oracle generated events are very repeated"
+
+- Diagnosis: the repetition guard was structurally dead — nothing told
+  the Oracle to echo the corpus record id, so TurnRecord stored invented
+  ids and `exclude_ids` never matched anything. Exclusion also only
+  looked back 8 turns. Late-game: the hard severity floor + prereq gates
+  collapsed the eligible pool to ~a dozen events. (DB ground truth showed
+  stored events were distinct — the FELT repetition is partly UX-8's
+  duplicate rows and partly same-category streaks.)
+- Fix: Oracle must set source_event_id = exact corpus id (schema +
+  prompt); TurnRecord stores it; exclusion is now run-wide by id AND
+  normalized title; severity floor became a soft scoring preference;
+  explicit variety rule (never repeat an event/arc; rotate categories).
+- Severity: high
+- Status: fixed — pending live re-test
+
+## UX-11 — Setup choices don't influence the run; runs don't feel customized
+
+> "the top bar ... need to be better correlated with the events ... the
+> setup in the beginning - when we select the type of founder, company,
+> etc. it should genuinely influence the types of events that occur ...
+> it still doesn't really make a ton of sense/feel deeply customized"
+
+- Diagnosis: industry had ZERO effect on selection (the filter keys on
+  industry_* tags that don't exist anywhere in the corpus — a no-op);
+  founder_vibe was never referenced in selection at all; craziness was
+  the only working lever. The Oracle also copies corpus event bodies
+  near-verbatim instead of adapting them to the company.
+- Fix: affinity scoring in the shortlist — industry maps through event
+  categories/tags, founder_vibe through a vibe→tags map (crypto_refugee
+  → crypto/banking/offshore, ex_mckinsey → board/governance, …);
+  mandatory ADAPTATION doctrine (corpus events are skeletons: product
+  noun, customers, rivals, buzzwords must be THIS company's); stat
+  changes correlate with events via UX-9's anchors + rationale line.
+  Feed chorus made fully fictional (@AccelDaemon, @readthecommit replace
+  real-person handles) per owner's either/or.
+- Severity: high
+- Status: fixed — pending live re-test
