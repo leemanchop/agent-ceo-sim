@@ -52,7 +52,10 @@ _SEV_RANK = {"S": 1, "M": 2, "L": 3, "XL": 4}
 _DAY_STEP = {"S": (3, 7), "M": (5, 10), "L": (7, 14), "XL": (10, 21)}
 # Atmospheric (mini) budget per turn by length mode — game/length_modes.md.
 _MINI_BUDGET = {"micro": (0, 1), "short": (1, 2), "medium": (1, 2), "long": (2, 2)}
-_LARGES_PER_EPISODE = 8  # micro/short stay single-episode regardless
+# Smaller episodes = faster time-to-first-beat: playback starts once
+# episode 1's prose lands, and the rest writes in the background. A single
+# 16K-token episode made short mode wait 4-6 minutes on a loading screen.
+_LARGES_PER_EPISODE = 5
 
 # Endgame archetype weights by craziness. tame/normal → soft landings;
 # crazy/unhinged → PRISON/FLED heavy. v1: target is fixed once picked.
@@ -488,7 +491,7 @@ def build_skeleton(state: RunState, corpus: WorldCorpus) -> Dict[str, Any]:
     endgame_id = endgame.record_id if endgame else ""
     finale_cats = _ENDGAME_FINALE_CATS.get(endgame.category if endgame else "", set())
 
-    episodes_total = 1 if mode in ("micro", "short") else \
+    episodes_total = 1 if mode == "micro" else \
         max(1, -(-n_turns // _LARGES_PER_EPISODE))  # ceil division
     script = run_script.new_script(
         length_mode=mode, endgame_id=endgame_id, episodes_total=episodes_total,
