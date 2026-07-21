@@ -850,6 +850,15 @@ export function useRun({
         onFeedItem: (item) => {
           setFeed((prev) => [item, ...prev].slice(0, 200));
         },
+        onDayTick: (day) => {
+          // Days-axis: the script's calendar ticking through a quiet
+          // stretch. Update the dashboard day and settle the stage into
+          // ambient so the finished event card visibly recedes.
+          setStats((cur) => ({ ...cur, day }));
+          setPhase((p) =>
+            p === "advancing" || p === "consequences" ? "ambient" : p
+          );
+        },
         onMiniAction: (mini) => {
           setTimeline((prev) => {
             if (prev.some((r) => r.id.startsWith(`tm-${mini.id}-`))) {

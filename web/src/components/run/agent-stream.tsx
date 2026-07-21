@@ -188,7 +188,15 @@ export function AgentStream({
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-5 py-5">
+      <div
+        className="flex-1 overflow-y-auto px-5 py-5"
+        style={{
+          // Days-axis quiet mode: between beats the played-out card recedes
+          // while the calendar ticks and the feed carries the motion.
+          opacity: isAmbient && event ? 0.45 : 1,
+          transition: "opacity 600ms ease",
+        }}
+      >
         {/* researching (live-mode initial bible build) */}
         {phase === "researching" && (
           <div className="flex flex-col items-start gap-4 max-w-2xl">

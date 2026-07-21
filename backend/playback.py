@@ -63,6 +63,10 @@ EPISODE_ABANDON_AFTER = 300.0
 # Per-beat crash isolation (mirrors the live loop's 3-strikes rule).
 MAX_CONSECUTIVE_BEAT_CRASHES = 3
 CRASH_RECOVERY_SLEEP = 1.0
+# Days-axis pacing: quiet days tick by visibly between beats (day.tick SSE).
+# Interval shrinks for big gaps so a 14-day jump never stalls the run.
+DAY_TICK_SLEEP = 0.35
+DAY_TICK_MAX_TOTAL = 3.5
 
 _KEEPALIVE = ": ping\n\n"
 
@@ -488,6 +492,33 @@ async def stream_script(
                 return
             beat = beats[cursor]
 
+        # ---- days-axis: tick the calendar through the quiet stretch -------
+        # The script owns the calendar; between beats we walk day-by-day so
+        # time visibly passes (feed/minis carry the motion), then freeze on
+        # the beat itself. Design: the owner's original 'days as the central
+        # piece' concept.
+        target_day = int(beat.get("day") or 0)
+        cur_day = int(getattr(state.stats, "day", 0) or 0)
+        if target_day > cur_day:
+            gap = target_day - cur_day
+            factor = 1.0
+            try:
+                base = float(gap_for_speed("1x")) or 1.0
+                factor = max(0.0, float(gap_for_speed(state.speed)) / base)
+            except Exception:
+                pass
+            interval = min(DAY_TICK_SLEEP, DAY_TICK_MAX_TOTAL / gap) * factor
+            for d in range(cur_day + 1, target_day + 1):
+                if getattr(state, "cancelled", False):
+                    return
+                while getattr(state, "paused", False):
+                    yield ": ping\n\n"
+                    await asyncio.sleep(2.0)
+                state.stats.day = d
+                yield sse("day.tick", {"day": d, "quiet": True})
+                if interval > 0:
+                    await asyncio.sleep(interval)
+
         # ---- play one beat with per-beat crash isolation -------------------
         try:
             player = (_play_mini(cursor, beat) if beat.get("kind") == "mini"
@@ -690,6 +721,7 @@ if __name__ == "__main__":
             "agent.deliberation_token", "agent.commit",
             "consequences.applied",
         ]
+        kinds = [k for k in kinds if k != "day.tick"]
         got = collapse(kinds)
         assert got == expected, f"event order mismatch:\n got {got}\n exp {expected}"
 
