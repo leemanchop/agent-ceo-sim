@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import queue as thread_queue
 import random
 import re
@@ -47,6 +48,74 @@ def install_routes(api: Any) -> None:  # api: FastAPI
         persist_run,
     )
     import run_store  # type: ignore
+
+    # Phase 2 scripted engine — optional until showrunner/playback land.
+    # Guarded import keeps the live engine fully functional without them,
+    # and ACES_SCRIPTED=0 is the kill switch back to the live engine.
+    try:
+        from showrunner import generate_script  # type: ignore
+        from playback import stream_script  # type: ignore
+        _scripted_available = True
+    except Exception:
+        generate_script = None  # type: ignore
+        stream_script = None  # type: ignore
+        _scripted_available = False
+
+    def _scripted_enabled(state) -> bool:
+        if not _scripted_available or state.interactive:
+            return False
+        if os.environ.get("ACES_SCRIPTED", "1") == "0":
+            return False
+        return bool((state.settings or {}).get("scripted", True))
+
+    async def _generate_script_events(state) -> AsyncGenerator[str, None]:
+        """Run showrunner generation, yielding progress as researcher.*
+        SSE lines the existing loading UI already renders. On any failure
+        the run falls back to the live engine (state.script stays None)."""
+        q: asyncio.Queue = asyncio.Queue()
+
+        async def on_event(kind: str, data: Dict[str, Any]) -> None:
+            await q.put((kind, data))
+
+        async def runner():
+            try:
+                script = await generate_script(
+                    state, on_event=on_event,
+                    persist_cb=lambda: persist_run(state.run_id),
+                )
+                state.script = script
+                persist_run(state.run_id)
+            except Exception:
+                traceback.print_exc()
+            finally:
+                await q.put(("__done__", None))
+
+        task = asyncio.create_task(runner())
+        try:
+            while True:
+                try:
+                    kind, data = await asyncio.wait_for(q.get(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"
+                    continue
+                if kind == "__done__":
+                    break
+                if kind == "script.progress":
+                    d = data or {}
+                    yield sse("researcher.searching", {
+                        "query": f"showrunner: {d.get('stage', 'writing')} "
+                                 f"{d.get('episode', '')}"
+                                 f"{'/' + str(d.get('of')) if d.get('of') else ''}",
+                        "step": 5, "of": 6,
+                    })
+                else:
+                    yield sse(kind, data)
+        finally:
+            if not task.done():
+                # generation continues in background (later episodes) — the
+                # returned script object is already on state once episode 1
+                # lands; do not cancel.
+                pass
 
     def sse(event: str, data: Any) -> str:
         return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
@@ -181,6 +250,9 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                 _apply_bible_to_initial_stats(state)
                 persist_run(state.run_id)
                 yield sse("researcher.bible_complete", {"bible": bible})
+                if _scripted_enabled(state) and not state.script:
+                    async for chunk in _generate_script_events(state):
+                        yield chunk
                 state.status = "streaming"
                 yield sse("stream.open", {
                     "version": "1.0.0",
@@ -197,6 +269,9 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                 # Research already finished — a reconnect just needs the
                 # terminal events to proceed to /stream.
                 yield sse("researcher.bible_complete", {"bible": state.bible})
+                if _scripted_enabled(state) and not state.script:
+                    async for chunk in _generate_script_events(state):
+                        yield chunk
                 state.status = "streaming"
                 yield sse("stream.open", {
                     "version": "1.0.0", "first_turn_in_seconds": 2,
@@ -237,6 +312,26 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                     state.bible_yaml_raw = json.dumps(bible, indent=2)
                     _apply_bible_to_initial_stats(state)
                     persist_run(state.run_id)
+                    if _scripted_enabled(state) and not state.script:
+                        async def _fwd(kind: str, data: Dict[str, Any]) -> None:
+                            if kind == "script.progress":
+                                d = data or {}
+                                await queue.put(("researcher.searching", {
+                                    "query": f"showrunner: {d.get('stage', 'writing')} "
+                                             f"{d.get('episode', '')}"
+                                             f"{'/' + str(d.get('of')) if d.get('of') else ''}",
+                                    "step": 5, "of": 6,
+                                }))
+                            else:
+                                await queue.put((kind, data))
+                        try:
+                            state.script = await generate_script(
+                                state, on_event=_fwd,
+                                persist_cb=lambda: persist_run(state.run_id),
+                            )
+                            persist_run(state.run_id)
+                        except Exception:
+                            traceback.print_exc()  # fall back to live engine
                     state.status = "streaming"
                     await queue.put(("stream.open", {
                         "version": "1.0.0",
@@ -339,6 +434,38 @@ def install_routes(api: Any) -> None:  # api: FastAPI
             yield sse("stream.open", {
                 "version": "1.0.0", "first_turn_in_seconds": 1,
             })
+            # ---- Phase 2: scripted playback (spectate) ----------------
+            # The script was pregenerated at /start; playback just streams
+            # it over the same SSE contract. Endgame emission stays here.
+            if state.script and _scripted_enabled(state):
+                try:
+                    async for chunk in stream_script(
+                        state,
+                        sse=sse,
+                        persist_run=persist_run,
+                        run_store=run_store,
+                        emit_achievements=_emit_achievements,
+                        gap_for_speed=_gap_for_speed,
+                        feed_event_kind=_feed_event_kind,
+                        feed_payload=_feed_payload,
+                        founder_handle=_founder_handle,
+                        founder_name=_founder_name,
+                        system_error_sse=_system_error_sse,
+                    ):
+                        yield chunk
+                except asyncio.CancelledError:
+                    return
+                except Exception:
+                    print(f"[playback] run={state.run_id} died:")
+                    traceback.print_exc()
+                    yield _system_error_sse(
+                        "the projector jammed — the reel is safe, refresh to resume",
+                    )
+                    return
+                if not state.cancelled and state.status not in ("abandoned",):
+                    async for chunk in _emit_endgame(state, sse):
+                        yield chunk
+                return
             try:
                 while not state.cancelled and state.turn < state.max_turns():
                     # Pause handling: yield only keepalives until unpaused.
@@ -1404,6 +1531,14 @@ def _pick_endgame(state):
     except Exception:
         return ("END-FALLBACK-001",
                 "The run ended quietly. The chorus moved on.")
+    # Scripted runs chose their destination up front — honor it so the
+    # post-mortem matches the story that was actually told.
+    script = getattr(state, "script", None)
+    if isinstance(script, dict) and script.get("endgame_id"):
+        target = script["endgame_id"]
+        for eg in corpus.endgames:
+            if eg.record_id == target:
+                return (eg.record_id, eg.raw_markdown)
     if not corpus.endgames:
         return ("END-FALLBACK-001",
                 "The run ended quietly. The chorus moved on.")

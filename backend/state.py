@@ -253,6 +253,13 @@ class RunState:
     # Cancellation hook for long streams.
     cancelled: bool = False
 
+    # Pregenerated run script (Phase 2, spectate). `script` is the RunScript
+    # dict from showrunner.generate_script; `script_cursor` is the index of
+    # the next unplayed beat — playback resumes here after any reconnect.
+    # Both are dataclass fields so _state_to_blob's asdict() persists them.
+    script: Optional[Dict[str, Any]] = None
+    script_cursor: int = 0
+
     def ensure_decision_queue(self) -> asyncio.Queue:
         """Lazily create the decision queue inside the running event loop."""
         if self.decision_queue is None:
