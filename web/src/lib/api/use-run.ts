@@ -53,6 +53,13 @@ import {
 } from "./client";
 import { attachStream, type RunStreamHandlers } from "./sse-adapter";
 
+// React 18 dev StrictMode double-invokes the bootstrap effect: the first
+// invocation's createRun POST is already in flight when its cleanup runs,
+// so two backend runs got created and the surviving UI sometimes followed
+// the dead one (empty live log, orphaned "initialized" runs). Share one
+// in-flight create per slug so both invocations converge on the same run.
+const _inflightCreates = new Map<string, Promise<{ run_id: string }>>();
+
 const MINI_DELAY_BASE = 2500;
 const TIMEFRAME_MUL: Record<MiniAction["timeframe"], number> = {
   short: 0.5,
@@ -634,25 +641,33 @@ export function useRun({
           }));
         }
 
-        const created = await createRun({
-          mode: isTemplate ? "template" : "uploaded",
-          template_id: isTemplate ? runId : null,
-          company: isTemplate
-            ? null
-            : {
-                name: userInput.name || runId,
-                one_liner: userInput.one_liner || "",
-                industry: userInput.industry || "other",
-                founder_vibe: userInput.founder_vibe || undefined,
-                founder: userInput.founder || undefined,
-                founder_handle: userInput.founder_handle || undefined,
-              },
-          settings: {
-            length_mode: (userInput.length as "micro" | "short" | "medium" | "long") || "medium",
-            craziness: (userInput.craziness as "tame" | "normal" | "unhinged") || "normal",
-            interactive: mode === "ceo",
-          },
-        });
+        let createP = _inflightCreates.get(runId);
+        if (!createP) {
+          createP = createRun({
+            mode: isTemplate ? "template" : "uploaded",
+            template_id: isTemplate ? runId : null,
+            company: isTemplate
+              ? null
+              : {
+                  name: userInput.name || runId,
+                  one_liner: userInput.one_liner || "",
+                  industry: userInput.industry || "other",
+                  founder_vibe: userInput.founder_vibe || undefined,
+                  founder: userInput.founder || undefined,
+                  founder_handle: userInput.founder_handle || undefined,
+                },
+            settings: {
+              length_mode: (userInput.length as "micro" | "short" | "medium" | "long") || "medium",
+              craziness: (userInput.craziness as "tame" | "normal" | "unhinged") || "normal",
+              interactive: mode === "ceo",
+            },
+          });
+          _inflightCreates.set(runId, createP);
+          // Expire after the bootstrap window so a deliberate re-visit
+          // starts a FRESH run instead of resuming this one.
+          setTimeout(() => _inflightCreates.delete(runId), 10_000);
+        }
+        const created = await createP;
         if (cancelled) return;
         const ulid = created.run_id;
         backendRunIdRef.current = ulid;
@@ -947,6 +962,10 @@ export function useRun({
         },
         onResearchProgress: (step, current, total) => {
           setResearchProgress({ step, current, total });
+          setResearchLog((prev) => {
+            const next = [...prev, { step, current, total, ts: Date.now() }];
+            return next.length > 50 ? next.slice(-50) : next;
+          });
         },
         onStreamReady: () => {
           // researcher done; main loop is about to start firing events.

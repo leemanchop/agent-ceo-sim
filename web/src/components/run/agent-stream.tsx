@@ -234,8 +234,8 @@ export function AgentStream({
               style={{ fontSize: 13, color: "var(--soft)", lineHeight: 1.5 }}
             >
               {templateId
-                ? "loading the hand-authored record, then the showrunner scripts episode one. about a minute."
-                : "landing page, founder posts, recent press — then the showrunner scripts episode one. usually 2–4 minutes. don't close the tab."}
+                ? "loading the hand-authored record. about a minute."
+                : "landing page, founder posts, recent press. usually 2–4 minutes. don't close the tab."}
             </div>
             {/* Live log — visible from second zero so the wait never looks
                 dead. Researcher steps AND showrunner episode progress both

@@ -12,7 +12,6 @@ import { Controls } from "@/components/run/controls";
 import { NotificationStack } from "@/components/run/notification-stack";
 import { useNotificationQueue } from "@/lib/use-notification-queue";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { UserMenu } from "@/components/system/user-menu";
 import { useRun } from "@/lib/api/use-run";
 import { getApiMode } from "@/lib/api/client";
 import { useAchievementQueue } from "@/lib/use-achievement-queue";
@@ -335,19 +334,6 @@ export default function RunPage() {
           <span className="pill" style={{ fontSize: 10 }}>
             RUN #{runId.padStart(5, "0").slice(0, 5)}
           </span>
-          <Link
-            href="/admin/usage"
-            className="font-mono uppercase tracking-wider hover:text-alarm"
-            style={{
-              fontSize: 10,
-              color: "var(--soft)",
-              textDecoration: "none",
-              letterSpacing: "0.08em",
-            }}
-          >
-            → usage
-          </Link>
-          <UserMenu />
         </span>
       </div>
 
