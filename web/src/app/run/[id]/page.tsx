@@ -7,6 +7,7 @@ import { Dashboard } from "@/components/run/dashboard";
 import { Timeline } from "@/components/run/timeline";
 import { AgentStream } from "@/components/run/agent-stream";
 import { LiveFeed } from "@/components/run/live-feed";
+import { FbiUnlockModal, FBI_UNLOCK_AT } from "@/components/run/fbi-file";
 import { Controls } from "@/components/run/controls";
 import { NotificationStack } from "@/components/run/notification-stack";
 import { useNotificationQueue } from "@/lib/use-notification-queue";
@@ -211,6 +212,26 @@ export default function RunPage() {
     });
   }, [committed, event?.id, event, safePush]);
 
+  // FBI tab unlock: latch at awareness >= FBI_UNLOCK_AT; first crossing
+  // throws the center-screen case-file modal (must be ✕'d — owner spec).
+  const [fbiUnlocked, setFbiUnlocked] = useState(false);
+  const [showFbiModal, setShowFbiModal] = useState(false);
+  useEffect(() => {
+    if (fbiUnlocked) return;
+    if ((stats?.fbi_awareness ?? 0) >= FBI_UNLOCK_AT) {
+      setFbiUnlocked(true);
+      const seenKey = `aces:run:${runId}:fbi-modal-seen`;
+      let seen = false;
+      try {
+        seen = localStorage.getItem(seenKey) === "1";
+        if (!seen) localStorage.setItem(seenKey, "1");
+      } catch {
+        /* localStorage optional */
+      }
+      if (!seen) setShowFbiModal(true);
+    }
+  }, [stats, fbiUnlocked, runId]);
+
   // valuation moved → pop-up with the one-line why (UX-12)
   const lastValNotifRef = useRef<string | null>(null);
   useEffect(() => {
@@ -407,7 +428,13 @@ export default function RunPage() {
           className="border-l border-ink min-h-0 overflow-hidden"
           style={{ borderLeftWidth: "1.4px" }}
         >
-          <LiveFeed entries={feed} speed={speed} />
+          <LiveFeed
+            entries={feed}
+            speed={speed}
+            fbiUnlocked={fbiUnlocked}
+            stats={stats}
+            timeline={timeline}
+          />
         </div>
       </div>
 
@@ -440,7 +467,13 @@ export default function RunPage() {
             />
           </TabsContent>
           <TabsContent value="feed" className="flex-1 min-h-0 m-0 mt-2">
-            <LiveFeed entries={feed} speed={speed} />
+            <LiveFeed
+            entries={feed}
+            speed={speed}
+            fbiUnlocked={fbiUnlocked}
+            stats={stats}
+            timeline={timeline}
+          />
           </TabsContent>
           <TabsContent value="timeline" className="flex-1 min-h-0 m-0 mt-2">
             <Timeline entries={timeline} />
@@ -481,6 +514,12 @@ export default function RunPage() {
           originalPredictionId={originalPredictions[eventIdx] ?? null}
         />
       ) : null}
+
+      <FbiUnlockModal
+        open={showFbiModal}
+        onClose={() => setShowFbiModal(false)}
+        companyName={bible.display_name || bible.name || "the company"}
+      />
 
       {/* Top-right notification stack — distinct from achievement toasts (bottom-right) */}
       <NotificationStack
