@@ -260,6 +260,12 @@ class RunState:
     script: Optional[Dict[str, Any]] = None
     script_cursor: int = 0
 
+    # Endgame outcome — persisted so the post-mortem page can fetch the
+    # REAL long-read by run id instead of falling back to demo copy
+    # (UX-14: "it's just doing the vellum thing").
+    endgame_id: str = ""
+    post_mortem_md: str = ""
+
     def ensure_decision_queue(self) -> asyncio.Queue:
         """Lazily create the decision queue inside the running event loop."""
         if self.decision_queue is None:
@@ -300,6 +306,11 @@ class RunState:
             "status": self.status,
             "company": self.bible,
             "settings": self.settings,
+            "endgame_id": self.endgame_id or None,
+            "endgame": ({
+                "endgame_id": self.endgame_id,
+                "post_mortem_long_read": self.post_mortem_md,
+            } if self.endgame_id else None),
             "stats": self.stats.snapshot(),
             "stat_history": [
                 {"turn": t.turn, "day": t.day, "stats": {}} for t in self.turns

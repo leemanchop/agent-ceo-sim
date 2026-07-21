@@ -1607,6 +1607,7 @@ async def _emit_endgame(state, sse):
 
     endgame_id, endgame_body = _pick_endgame(state)
     state.status = "completed"
+    state.endgame_id = endgame_id
     # Persist endgame_id + ended_at + completed status. Both calls are
     # idempotent — end_run() flips the row, persist_run() flushes the latest
     # in-memory snapshot (final stats, achievements, etc.) to the state blob.
@@ -1685,6 +1686,15 @@ async def _emit_endgame(state, sse):
         if ev.get("type") == "post_mortem.delta":
             yield sse("post_mortem.delta", {"text": ev.get("text", "")})
         elif ev.get("type") == "post_mortem.complete":
+            # Persist the long-read so the post-mortem page can fetch the
+            # real text by run id (archive links, other devices, cleared
+            # localStorage — every path that used to get demo copy).
+            state.post_mortem_md = ev.get("markdown", "") or ""
+            try:
+                from state import persist_run as _persist2  # type: ignore
+                _persist2(state.run_id)
+            except Exception:
+                pass
             yield sse("post_mortem.complete", {
                 "markdown": ev.get("markdown", ""),
                 "endgame_id": endgame_id,

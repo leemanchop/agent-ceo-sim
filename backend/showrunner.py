@@ -59,15 +59,17 @@ _LARGES_PER_EPISODE = 5
 
 # Endgame archetype weights by craziness. tame/normal → soft landings;
 # crazy/unhinged → PRISON/FLED heavy. v1: target is fixed once picked.
+# Owner call: every band one notch spicier — even tame runs can end in
+# handcuffs occasionally, and normal leans doom.
 _ENDGAME_WEIGHTS = {
-    "tame":     {"FAILUP": 4.0, "CULT": 3.0, "GOTAWAY": 3.0, "SUCCESS": 2.0,
-                 "SECRET": 0.5, "PRISON": 0.25, "FLED": 0.25},
-    "normal":   {"FAILUP": 4.0, "CULT": 3.0, "GOTAWAY": 3.0, "SUCCESS": 1.0,
-                 "SECRET": 1.5, "PRISON": 1.0, "FLED": 1.0},
-    "crazy":    {"FAILUP": 1.5, "CULT": 1.5, "GOTAWAY": 1.5, "SUCCESS": 0.5,
-                 "SECRET": 2.0, "PRISON": 4.0, "FLED": 4.0},
-    "unhinged": {"FAILUP": 1.0, "CULT": 1.0, "GOTAWAY": 1.0, "SUCCESS": 0.25,
-                 "SECRET": 3.0, "PRISON": 5.0, "FLED": 5.0},
+    "tame":     {"FAILUP": 4.0, "CULT": 3.0, "GOTAWAY": 3.0, "SUCCESS": 1.5,
+                 "SECRET": 1.0, "PRISON": 0.75, "FLED": 0.5},
+    "normal":   {"FAILUP": 3.5, "CULT": 2.5, "GOTAWAY": 2.5, "SUCCESS": 0.75,
+                 "SECRET": 2.0, "PRISON": 2.0, "FLED": 1.5},
+    "crazy":    {"FAILUP": 1.0, "CULT": 1.25, "GOTAWAY": 1.25, "SUCCESS": 0.4,
+                 "SECRET": 2.5, "PRISON": 5.0, "FLED": 5.0},
+    "unhinged": {"FAILUP": 0.75, "CULT": 1.0, "GOTAWAY": 0.75, "SUCCESS": 0.1,
+                 "SECRET": 3.5, "PRISON": 6.0, "FLED": 6.0},
 }
 # Final-turn category nudge so the last beat points at the locked ending.
 _ENDGAME_FINALE_CATS = {
@@ -279,14 +281,15 @@ def _elig_mode(mode: str) -> str:
 
 def _allowed_severities(mode: str, turn: int, n_turns: int, craziness: str) -> List[str]:
     """Severity ramp per game/length_modes.md; micro scales short's ramp."""
+    # Owner call ("a bit crazier"): L/XL unlock earlier in every mode.
     if mode == "micro":
-        l_start, xl_start = 3, n_turns
+        l_start, xl_start = 2, max(n_turns - 1, 4)
     elif mode == "short":
-        l_start, xl_start = 4, max(n_turns - 1, 5)
+        l_start, xl_start = 3, max(n_turns - 3, 4)
     elif mode == "long":
-        l_start, xl_start = 12, 30
+        l_start, xl_start = 8, 22
     else:  # medium + unknown
-        l_start, xl_start = 6, 16
+        l_start, xl_start = 4, 12
     allowed = ["S", "M"]
     if turn >= l_start:
         allowed.append("L")
@@ -456,7 +459,7 @@ def _new_beat(kind: str, turn: int, episode: int) -> Dict[str, Any]:
 # public" x5 observed) — prompt-only variety rules didn't stick. The
 # skeleton now scripts each large beat's pick TONE; the prose pass must
 # make ceo_choice match it, which forces varied strategies by structure.
-_PICK_TONE_CYCLE = ["based", "unhinged", "midwit", "unhinged", "based", "rare-cucked"]
+_PICK_TONE_CYCLE = ["unhinged", "based", "unhinged", "based", "unhinged", "midwit"]
 
 
 def _next_pick_tone(beat: Dict[str, Any], rng: "random.Random") -> str:
@@ -503,6 +506,18 @@ def build_skeleton(state: RunState, corpus: WorldCorpus) -> Dict[str, Any]:
     pool = filter_events(
         corpus, length_mode=elig, craziness=craziness, industry=industry,
     )
+    # Spice: events from one craziness band UP are also eligible (a normal
+    # run can catch a crazy event). Track their ids for a score bonus so
+    # they actually surface, not just theoretically qualify.
+    _band_up = {"tame": "normal", "normal": "crazy", "crazy": "unhinged"}.get(craziness)
+    spice_ids: Set[str] = set()
+    if _band_up:
+        for ev in filter_events(
+            corpus, length_mode=elig, craziness=_band_up, industry=industry,
+        ):
+            if ev.record_id not in {e.record_id for e in pool}:
+                pool.append(ev)
+                spice_ids.add(ev.record_id)
     mini_lo, mini_hi = _MINI_BUDGET.get(mode, (1, 2))
 
     used: Set[str] = set()
@@ -543,6 +558,10 @@ def build_skeleton(state: RunState, corpus: WorldCorpus) -> Dict[str, Any]:
             sc += 0.25
         if tags & vibe_tags:
             sc += 0.25
+        if ev.record_id in spice_ids:
+            sc += 0.3  # wilder-band events punch above their weight
+        if ev.plants:
+            sc += 0.2  # planting unlocks the seed-gated back half
         sc += 0.6 * sum(1 for s in _pays_off(ev) if s in planted)  # keep arcs alive
         if (ev.severity or "S") == pref:
             sc += 0.75
@@ -622,6 +641,16 @@ def build_skeleton(state: RunState, corpus: WorldCorpus) -> Dict[str, Any]:
             rot = [ev for ev in base if ev.category != last_cats[-1]]
             if rot or not fbi_forced:
                 base = rot
+
+        # Severity preference is a HARD restriction when satisfiable — the
+        # +0.75 score nudge lost to affinity/spice bonuses statistically and
+        # runs came out all-S/M. Escalation must actually escalate.
+        if not fbi_forced and pref in ("L", "XL"):
+            hot = [ev for ev in base if (ev.severity or "S") == pref]
+            if not hot and pref == "XL":
+                hot = [ev for ev in base if (ev.severity or "S") == "L"]
+            if hot:
+                base = hot
 
         if base:
             rec = weighted_pick(base, pref, final_turn)
@@ -808,6 +837,10 @@ ADAPT, NEVER COPY: each beat's inspiration skeleton is generic corpus text.
 Rewrite every specific for THIS company — product noun, customers, rivals,
 buzzwords from the bible. Generic corpus phrasing reaching the screen
 verbatim is a failure.
+
+THE CEO IS RISK-ON: between two defensible moves, the bolder one wins.
+Caution needs a justification; audacity doesn't. The comedy engine is a
+founder who keeps choosing the ridiculous branch with total conviction.
 
 VARY THE CEO'S MOVES: never reuse the same choice label wording across
 beats ("double down in public" once per run, max). Each beat's choices

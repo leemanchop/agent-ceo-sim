@@ -258,3 +258,36 @@ Reported by Nathan playing real-LLM runs locally (2026-07-20).
   the Field margin (`[&>label]:mt-0`) and top-aligns items.
 - Severity: low
 - Status: fixed — pending live re-test
+
+## UX-14 — Post-mortem still "doing the vellum thing"
+
+> "i don't think the post mortem is accurate, it's just doing the vellum
+> thing."
+
+- Diagnosis: UX-5's localStorage handoff only works for the exact
+  browser+slug that played the run — archive links route by ULID
+  (different key), the long-read streams AFTER endgame.reached (click
+  through too early → missing), and the post-mortem markdown was never
+  persisted server-side, so every fallback path landed on demo copy.
+- Fix: endgame_id + post_mortem_md persist on the run and surface in the
+  snapshot's `endgame` block; the ULID/server fetch path now returns the
+  real long-read; the client hydration fetches by ULID when the handoff
+  lacks the markdown.
+- Severity: high (the post-mortem is the shareable payoff)
+- Status: fixed — pending live re-test
+
+## UX-15 — Make all modes a bit crazier
+
+> "make all the modes just a bit crazier in terms of potential events and
+> the choices that the agent makes."
+
+- Fix (script generator): endgame weights one notch spicier per band
+  (normal now sends ~25% of runs to PRISON/FLED); L/XL severities unlock
+  earlier in every mode AND the severity preference is now a hard
+  restriction when satisfiable (runs previously came out all-S/M —
+  verified 26/72 larges land L/XL post-fix); events from one craziness
+  band UP are eligible with a score bonus (normal runs catch crazy
+  events — verified 1-4 per short run); events that plant seeds score
+  higher so the gated back-half unlocks; CEO pick-tone cycle leans
+  unhinged (6/12 picks) and the prose doctrine adds "THE CEO IS RISK-ON".
+- Status: shipped — tune further after play

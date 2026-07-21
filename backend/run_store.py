@@ -254,6 +254,8 @@ def _blob_to_state(
         cancelled=bool(blob.get("cancelled", False)),
         script=blob.get("script"),
         script_cursor=int(blob.get("script_cursor") or 0),
+        endgame_id=blob.get("endgame_id") or "",
+        post_mortem_md=blob.get("post_mortem_md") or "",
     )
     # decision_queue is rebound lazily inside the streaming loop's event loop.
     return state
