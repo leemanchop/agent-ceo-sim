@@ -393,14 +393,28 @@ def _cap_beat_deltas(deltas: Dict[str, int], running: Dict[str, int],
     return out
 
 
+# The FBI pane unlocks at fbi_awareness >= 20 (web fbi-file.tsx keeps the
+# same constant). Criminal endings below this line are incoherent: you can't
+# be sentenced by feds who never opened the file.
+FBI_UNLOCK_AT = 20
+_FBI_ARC_CATS = {"PRISON", "FLED"}
+
+
+def _needs_fbi_arc(eg: CorpusRecord) -> bool:
+    return (eg.category or "").upper() in _FBI_ARC_CATS
+
+
 def _pick_endgame(corpus: WorldCorpus, craziness: str, elig: str,
-                  rng: random.Random) -> Optional[CorpusRecord]:
+                  rng: random.Random,
+                  allow=None) -> Optional[CorpusRecord]:
     weights = _ENDGAME_WEIGHTS.get(craziness, _ENDGAME_WEIGHTS["normal"])
     pool: List[Tuple[CorpusRecord, float]] = []
     per_cat: Dict[str, int] = {}
     for eg in corpus.endgames:
         per_cat[eg.category] = per_cat.get(eg.category, 0) + 1
     for eg in corpus.endgames:
+        if allow is not None and not allow(eg):
+            continue
         if eg.length_eligibility and elig not in eg.length_eligibility:
             continue
         # Normalize by archetype size so the craziness table sets ARCHETYPE
@@ -412,6 +426,8 @@ def _pick_endgame(corpus: WorldCorpus, craziness: str, elig: str,
         if w > 0:
             pool.append((eg, w))
     if not pool:
+        if allow is not None:
+            return None  # caller keeps its current pick
         return corpus.endgames[0] if corpus.endgames else None
     return rng.choices([p[0] for p in pool], weights=[p[1] for p in pool], k=1)[0]
 
@@ -743,6 +759,26 @@ def build_skeleton(state: RunState, corpus: WorldCorpus) -> Dict[str, Any]:
         for idx in range(1, rng.randint(mini_lo, mini_hi) + 1):
             beats.append(make_mini(turn, idx, episode))
         beats.append(make_large(turn, episode))
+
+    # Coherence gate (owner rule): prison / fled-the-country endings require
+    # the FBI arc to have actually opened. The endgame is picked before the
+    # trajectory exists, so validate here — if the run never crosses the FBI
+    # unlock, re-pick among endings that don't need federal heat. (Observed:
+    # a run with peak fbi_awareness 8 sentenced to 25 years federal.)
+    peak_fbi = max(
+        [int(initial.get("fbi_awareness", 0))]
+        + [int((b.get("stats_after") or {}).get("fbi_awareness", 0))
+           for b in beats]
+    )
+    if endgame is not None and _needs_fbi_arc(endgame) \
+            and peak_fbi < FBI_UNLOCK_AT:
+        swap = _pick_endgame(
+            corpus, craziness, elig, rng,
+            allow=lambda eg: not _needs_fbi_arc(eg),
+        )
+        if swap is not None:
+            endgame = swap
+            script["endgame_id"] = swap.record_id
 
     script["beats"] = beats
     return script
@@ -1560,8 +1596,38 @@ if __name__ == "__main__":
     sk2 = build_skeleton(st, get_corpus())
     assert json.dumps(sk1, sort_keys=True) == json.dumps(sk2, sort_keys=True)
 
+    # Coherence invariant sweep: a PRISON/FLED ending is only legal when the
+    # trajectory actually crossed the FBI unlock. 200 seeded skeletons across
+    # every mode × craziness band.
+    by_id = {eg.record_id: eg for eg in get_corpus().endgames}
+    fbi_swaps = criminal = 0
+    for lm in ("micro", "short", "medium", "long"):
+        for cz in ("tame", "normal", "crazy", "unhinged"):
+            for i in range(200 // 16):
+                sti = RunState(
+                    run_id="coherence-%s-%s-%02d" % (lm, cz, i),
+                    settings={"length_mode": lm, "craziness": cz},
+                )
+                sti.bible = fake_bible
+                sk = build_skeleton(sti, get_corpus())
+                rec = by_id.get(sk["endgame_id"])
+                peak = max(
+                    [int(sk["initial_stats"].get("fbi_awareness", 0))]
+                    + [int((b.get("stats_after") or {}).get("fbi_awareness", 0))
+                       for b in sk["beats"]]
+                )
+                if rec is not None and _needs_fbi_arc(rec):
+                    criminal += 1
+                    assert peak >= FBI_UNLOCK_AT, (
+                        "criminal ending without FBI arc: %s peak_fbi=%d (%s/%s)"
+                        % (sk["endgame_id"], peak, lm, cz))
+                elif peak < FBI_UNLOCK_AT:
+                    fbi_swaps += 1  # cold run correctly landed non-criminal
+
     print("PASS — %d beats (%d large, %d mini), endgame=%s, episodes=%d/%d, "
-          "persists=%d, progress_events=%d" % (
+          "persists=%d, progress_events=%d | coherence sweep: %d criminal "
+          "endings all earned, %d cold runs non-criminal" % (
               len(script["beats"]), len(larges), len(minis),
               script["endgame_id"], script["episodes_ready"],
-              script["episodes_total"], len(persist_calls), len(got_events)))
+              script["episodes_total"], len(persist_calls), len(got_events),
+              criminal, fbi_swaps))

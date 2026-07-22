@@ -300,6 +300,27 @@ class RunState:
         if len(self.feed) > 200:
             self.feed = self.feed[-200:]
 
+    def _endgame_block(self) -> Dict[str, Any]:
+        """Everything the post-mortem page needs, flattened — it was
+        reading a shape the API never sent and mock-falling-back (the
+        'vellum thing', final form)."""
+        bible = self.bible or {}
+        co = bible.get("company") or {}
+        founders = bible.get("founders") or []
+        f0 = founders[0] if founders and isinstance(founders[0], dict) else {}
+        disp = co.get("display_name") or co.get("name") or "the company"
+        pretty = self.endgame_id.replace("END-", "").replace("-", " ").title()
+        return {
+            "endgame_id": self.endgame_id,
+            "title": self.endgame_id,
+            "final_headline": f"{disp} — closed.",
+            "tagline": f"{disp}: {pretty}.",
+            "post_mortem_long_read": self.post_mortem_md,
+            "company_name": disp,
+            "one_liner": co.get("one_liner") or "",
+            "founder_name": f0.get("name") or "",
+        }
+
     def snapshot(self) -> Dict[str, Any]:
         return {
             "run_id": self.run_id,
@@ -319,10 +340,7 @@ class RunState:
             "bible": self.bible,
             "settings": self.settings,
             "endgame_id": self.endgame_id or None,
-            "endgame": ({
-                "endgame_id": self.endgame_id,
-                "post_mortem_long_read": self.post_mortem_md,
-            } if self.endgame_id else None),
+            "endgame": (self._endgame_block() if self.endgame_id else None),
             "stats": self.stats.snapshot(),
             "stat_history": [
                 {"turn": t.turn, "day": t.day, "stats": {}} for t in self.turns

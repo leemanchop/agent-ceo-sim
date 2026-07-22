@@ -46,21 +46,48 @@ async function loadEndgame(runId: string): Promise<EndgameSnapshot> {
     const snap = (await res.json()) as {
       run_id?: string;
       status?: string;
-      company?: { display_name?: string; name?: string; one_liner?: string; founder?: string };
+      // NOTE: `company` on the wire is the whole nested bible.
+      company?: {
+        company?: { display_name?: string; name?: string; one_liner?: string };
+        founders?: Array<{ name?: string }>;
+      };
+      stats?: { valuation?: number; day?: number } & Record<string, number>;
       endgame_id?: string;
       endgame?: {
         endgame_id?: string;
         title?: string;
         final_headline?: string;
         post_mortem_long_read?: string;
-        archetype?: string;
         tagline?: string;
+        company_name?: string;
+        one_liner?: string;
+        founder_name?: string;
       };
     };
     if (snap.status !== "completed") return MOCK_ENDGAME;
+    const bibleCo = snap.company?.company;
     const company =
-      snap.company?.display_name ?? snap.company?.name ?? MOCK_ENDGAME.company_name;
-    const founder = snap.company?.founder ?? MOCK_ENDGAME.founder_name;
+      snap.endgame?.company_name ??
+      bibleCo?.display_name ??
+      bibleCo?.name ??
+      MOCK_ENDGAME.company_name;
+    const founder =
+      snap.endgame?.founder_name ??
+      snap.company?.founders?.[0]?.name ??
+      MOCK_ENDGAME.founder_name;
+    const initials = (founder || "??")
+      .split(/\s+/)
+      .map((w: string) => w[0] ?? "")
+      .join("")
+      .slice(0, 2)
+      .toUpperCase();
+    // Real end-of-run numbers — the mock's $4.0B / 287-day card stats read
+    // as absurd on a real micro run. Final stats are the best persisted
+    // truth (peak isn't tracked separately yet).
+    const realStats =
+      snap.stats && typeof snap.stats.valuation === "number"
+        ? { ...MOCK_ENDGAME.final_stats, ...snap.stats }
+        : null;
     return {
       ...MOCK_ENDGAME,
       endgame_id: snap.endgame?.endgame_id ?? snap.endgame_id ?? MOCK_ENDGAME.endgame_id,
@@ -70,8 +97,13 @@ async function loadEndgame(runId: string): Promise<EndgameSnapshot> {
         snap.endgame?.post_mortem_long_read ?? MOCK_ENDGAME.post_mortem_long_read,
       tagline: snap.endgame?.tagline ?? MOCK_ENDGAME.tagline,
       company_name: company.toUpperCase(),
-      company_one_liner: snap.company?.one_liner ?? MOCK_ENDGAME.company_one_liner,
+      company_one_liner:
+        snap.endgame?.one_liner ?? bibleCo?.one_liner ?? MOCK_ENDGAME.company_one_liner,
       founder_name: founder,
+      founder_initials: initials,
+      ...(realStats
+        ? { final_stats: realStats, peak_stats: realStats }
+        : {}),
     };
   } catch {
     // Backend down → return the demo so the page still ships.
