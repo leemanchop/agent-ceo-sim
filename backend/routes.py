@@ -31,7 +31,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 
 def install_routes(api: Any) -> None:  # api: FastAPI
-    from fastapi import HTTPException, Request
+    from fastapi import HTTPException
     from fastapi.responses import StreamingResponse
 
     # Imports at install time so this file is cheap to import without deps.
@@ -209,8 +209,8 @@ def install_routes(api: Any) -> None:  # api: FastAPI
 
     # TODO: gate behind admin auth before public launch (same as /usage).
     @api.get("/admin/submissions")
-    async def admin_submissions(request: Request, format: str = "json", limit: int = 5000):
-        _require_admin(request)
+    async def admin_submissions(format: str = "json", limit: int = 5000, token: str = ""):
+        _require_admin(token)
         """Owner lead-capture export: every company/founder/handle players
         have submitted. ?format=csv downloads a spreadsheet-ready file."""
         rows = run_store.list_submissions(limit=limit)
@@ -235,9 +235,9 @@ def install_routes(api: Any) -> None:  # api: FastAPI
 
     # TODO: gate behind admin auth before public launch (same as /usage).
     @api.get("/run/{run_id}/script")
-    async def run_script_dump(run_id: str, request: Request):
+    async def run_script_dump(run_id: str, token: str = ""):
         """Debug/admin: the full pregenerated RunScript (Phase 2)."""
-        _require_admin(request)
+        _require_admin(token)
         state = get_run(run_id)
         if not state:
             raise HTTPException(404, "run not found")
@@ -1135,20 +1135,16 @@ def _clamp_deltas(deltas: Dict[str, Any], stats, event_card: Dict[str, Any]) -> 
 
 
 
-def _require_admin(request: Any) -> None:
+def _require_admin(token: str) -> None:
     """Gate admin surfaces behind ACES_ADMIN_TOKEN (Modal secret 'admin').
-    Unset token (local dev) leaves them open. Accepts ?token= or the
-    X-Admin-Token header."""
+    Unset expected token (local dev) leaves them open. NOTE: plain `?token=`
+    query param — fastapi Request injection breaks under `from __future__
+    import annotations` with function-local imports (422s)."""
     from fastapi import HTTPException as _HTTPException
     expected = os.environ.get("ACES_ADMIN_TOKEN", "")
     if not expected:
         return
-    supplied = (
-        request.query_params.get("token")
-        or request.headers.get("x-admin-token")
-        or ""
-    )
-    if supplied != expected:
+    if token != expected:
         raise _HTTPException(403, "admin token required")
 
 

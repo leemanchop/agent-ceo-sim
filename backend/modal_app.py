@@ -126,32 +126,26 @@ def _build_fastapi():
         return {"ok": True, "achievement_engine": ach_status,
                 "scripted_engine": scripted}
 
-    from fastapi import Request
-
-    def _admin(request: Request) -> None:
+    def _admin(token: str) -> None:
         expected = os.environ.get("ACES_ADMIN_TOKEN", "")
-        if not expected:
-            return
-        supplied = (request.query_params.get("token")
-                    or request.headers.get("x-admin-token") or "")
-        if supplied != expected:
+        if expected and token != expected:
             raise HTTPException(403, "admin token required")
 
     @fapi.get("/usage")
-    def usage_all(request: Request):
-        _admin(request)
+    def usage_all(token: str = ""):
+        _admin(token)
         return usage_tracker.summarize(None)
 
     @fapi.get("/usage/{run_id}")
-    def usage_one(run_id: str, request: Request):
-        _admin(request)
+    def usage_one(run_id: str, token: str = ""):
+        _admin(token)
         if not run_id:
             raise HTTPException(400, "run_id required")
         return usage_tracker.summarize(run_id)
 
     @fapi.get("/rate_limits")
-    def rate_limits(request: Request):
-        _admin(request)
+    def rate_limits(token: str = ""):
+        _admin(token)
         return usage_tracker.current_rate_limits()
 
     # Mount per-run SSE + REST routes (POST /run/create, GET /run/{id}/stream, …).
