@@ -167,6 +167,16 @@ export function AgentStream({
 
   const isAmbient = phase === "ambient" || phase === "mini_action";
 
+  // UX-19: after the user predicts, the agent's reasoning + verdict +
+  // stat ripples are the payoff — bring them into view automatically so
+  // the reveal never requires scrolling.
+  const revealRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (phase === "revealed" || phase === "consequences") {
+      revealRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [phase]);
+
   return (
     <div className="flex flex-col h-full overflow-hidden bg-paper">
       <div
@@ -589,10 +599,19 @@ export function AgentStream({
               </div>
             </div>
 
-            {/* reasoning */}
+            {/* reasoning — the REVEAL: streams only after the prediction
+                locks (playback sends it post-window), styled as the focal
+                point of the beat */}
             {showReasoning && (
-              <div className="mt-4">
-                <div className="tag mb-2">
+              <div
+                className="mt-4"
+                ref={revealRef}
+                style={{
+                  borderLeft: "3px solid var(--alarm)",
+                  paddingLeft: 12,
+                }}
+              >
+                <div className="tag mb-2" style={{ color: "var(--alarm)" }}>
                   {mode === "spectate"
                     ? "AGENT · thinking"
                     : "AGENT · what I would have done"}
@@ -600,9 +619,9 @@ export function AgentStream({
                 <div
                   className="font-mono whitespace-pre-wrap"
                   style={{
-                    fontSize: 12,
-                    lineHeight: 1.5,
-                    color: "var(--ink-2)",
+                    fontSize: 14,
+                    lineHeight: 1.55,
+                    color: "var(--ink)",
                   }}
                 >
                   <span className="text-soft">agent ›</span> {streamed}

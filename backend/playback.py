@@ -43,6 +43,9 @@ from typing import Any, AsyncGenerator, Callable, Dict, List
 
 # Sleep between agent.thought_token chunks (scaled by playback speed).
 TOKEN_SLEEP = 0.02
+# Read pause after a decision resolves (reveal + verdict + stat ripples on
+# screen) before the calendar starts ticking again. Scaled by speed.
+READ_PAUSE = 6.0
 # Sleep between agent.deliberation_token chunks (scaled by playback speed).
 DELIB_SLEEP = 0.015
 # Spectate-mode prediction window after choices.appear (force_choice is N/A
@@ -258,21 +261,9 @@ async def stream_script(
             "tags": beat.get("tags") or [],
         })
 
-        # ---- c) CEO hidden reasoning, re-streamed token by token ----------
-        thought_id = f"thought_{turn}"
-        reasoning = _as_str(beat.get("ceo_reasoning"))
-        for chunk in _chunk_for_stream(reasoning):
-            yield sse("agent.thought_token", {
-                "token": chunk, "stream_id": thought_id,
-            })
-            if TOKEN_SLEEP * factor > 0:
-                await asyncio.sleep(TOKEN_SLEEP * factor)
-        yield sse("agent.thought_complete", {
-            "stream_id": thought_id,
-            "full_text": reasoning,
-        })
-
-        # ---- d) choices + prediction window --------------------------------
+        # ---- c) choices + prediction window (FIRST — the reasoning used to
+        # stream before the chips and spoiled the pick; the user now commits
+        # blind, then watches the agent think. UX-19.) ------------------
         choices = [c for c in (beat.get("choices") or []) if isinstance(c, dict)]
         window = PREDICTION_WINDOW_SECONDS
         yield sse("choices.appear", {
@@ -308,6 +299,21 @@ async def stream_script(
             # force_choice has no meaning in scripted playback — the script
             # owns the CEO's choice. Ignore politely and keep the window open.
             continue
+
+        # ---- d) CEO hidden reasoning — the REVEAL, streamed after the
+        # user's prediction locks (or the window expires) ---------------
+        thought_id = f"thought_{turn}"
+        reasoning = _as_str(beat.get("ceo_reasoning"))
+        for chunk in _chunk_for_stream(reasoning):
+            yield sse("agent.thought_token", {
+                "token": chunk, "stream_id": thought_id,
+            })
+            if TOKEN_SLEEP * factor > 0:
+                await asyncio.sleep(TOKEN_SLEEP * factor)
+        yield sse("agent.thought_complete", {
+            "stream_id": thought_id,
+            "full_text": reasoning,
+        })
 
         # ---- e) prediction grading ------------------------------------------
         # There is no counter to increment: RunState.snapshot() DERIVES
@@ -429,6 +435,17 @@ async def stream_script(
         # ---- j) achievement triggers -----------------------------------------
         for ach_evt in emit_achievements(state):
             yield ach_evt
+
+        # ---- read pause: let the reveal breathe (owner spec) ------------
+        pause = READ_PAUSE * factor
+        while pause > 0:
+            if getattr(state, "cancelled", False):
+                return
+            step = min(2.0, pause)
+            await asyncio.sleep(step)
+            pause -= step
+            if pause > 0:
+                yield ": ping\n\n"
 
         # Inter-beat breath, same knob as the live loop.
         await asyncio.sleep(float(gap_for_speed(state.speed)))
@@ -571,6 +588,7 @@ if __name__ == "__main__":
 
     # Instant pacing for the test.
     TOKEN_SLEEP = 0.0
+    READ_PAUSE = 0.0
     DELIB_SLEEP = 0.0
     PREDICTION_WINDOW_SECONDS = 0.25
     PAUSE_POLL_SECONDS = 0.01
@@ -710,14 +728,15 @@ if __name__ == "__main__":
 
         expected = [
             "turn.mini",
-            # large turn 1 (user predicted A; tweet + one reaction)
-            "turn.start", "event.materialize", "agent.thought_token",
-            "agent.thought_complete", "choices.appear",
+            # large turn 1 — predict-first order (UX-19): chips before the
+            # agent's reasoning so the pick can't be spoiled
+            "turn.start", "event.materialize", "choices.appear",
+            "agent.thought_token", "agent.thought_complete",
             "agent.deliberation_token", "agent.commit",
             "consequences.applied", "feed.tweet",
             # large turn 2 (no prediction; no tweet, no reactions)
-            "turn.start", "event.materialize", "agent.thought_token",
-            "agent.thought_complete", "choices.appear",
+            "turn.start", "event.materialize", "choices.appear",
+            "agent.thought_token", "agent.thought_complete",
             "agent.deliberation_token", "agent.commit",
             "consequences.applied",
         ]
