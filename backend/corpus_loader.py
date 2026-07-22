@@ -317,6 +317,50 @@ def render_corpus_for_prompt(corpus: WorldCorpus, *, max_chars: int = 180_000) -
     return text
 
 
+_STAMP_DANGLERS = {"IN", "THE", "OF", "A", "TO", "FOR", "AND", "WITH", "AT"}
+
+
+def _short_verdict(title: str, category: str) -> str:
+    """Trading-card stamp text (≤ ~26 chars, uppercase) from a record title.
+    '25 Years Federal — The Next Case Study' → '25 YEARS FEDERAL';
+    FLED gets the flight spelled out: 'FLED — SINGAPORE'."""
+    seg = re.split(r"\s+—\s+|,|\(", title or "")[0].strip() or title or ""
+    if (category or "").upper() == "FLED":
+        seg = seg if len(seg) <= 16 else "THE COUNTRY"
+        seg = "FLED — " + seg
+    out = seg.upper()
+    if len(out) > 26:
+        cut = out[:26]
+        out = cut[: cut.rfind(" ")] if " " in cut else cut
+        words = out.split()
+        while words and words[-1] in _STAMP_DANGLERS:
+            words.pop()
+        out = " ".join(words) or seg.upper()[:26]
+    return out
+
+
+def endgame_display(endgame_id: str) -> Dict[str, str]:
+    """Human strings for an endgame id — shared by the run snapshot and the
+    endgame.reached SSE payload so the card never shows a raw record id
+    (observed: title 'END-FLED-003', stamp stuck on mock '25 YEARS FEDERAL')."""
+    try:
+        corpus = get_corpus()
+    except Exception:  # pragma: no cover — local dev without /world
+        corpus = None
+    if corpus is not None:
+        for eg in corpus.endgames:
+            if eg.record_id == endgame_id:
+                title = (eg.title or endgame_id).strip()
+                return {
+                    "title": title,
+                    "verdict": _short_verdict(title, eg.category),
+                    "category": (eg.category or "").upper(),
+                }
+    pretty = (endgame_id or "").replace("END-", "").replace("-", " ").title()
+    return {"title": pretty or endgame_id, "verdict": pretty.upper()[:26],
+            "category": ""}
+
+
 # Eagerly load on import so cold-start cost lands at container boot, not turn 1.
 try:
     get_corpus()

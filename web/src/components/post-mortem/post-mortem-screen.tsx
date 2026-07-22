@@ -3,7 +3,11 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ShareCard, CARD_HEIGHT, CARD_WIDTH } from "./share-card";
-import type { EndgameSnapshot } from "@/lib/mock-endgame";
+import {
+  STAMP_BY_ARCHETYPE,
+  type EndgameArchetype,
+  type EndgameSnapshot,
+} from "@/lib/mock-endgame";
 
 type Props = {
   endgame: EndgameSnapshot;
@@ -57,6 +61,7 @@ export function PostMortemScreen({ endgame: serverEndgame, runId }: Props) {
         run_id?: string;
         endgame_id?: string;
         title?: string;
+        verdict?: string;
         post_mortem_long_read?: string;
         tagline?: string;
         bible?: {
@@ -69,10 +74,27 @@ export function PostMortemScreen({ endgame: serverEndgame, runId }: Props) {
       };
       const company =
         handoff.bible?.display_name ?? handoff.bible?.name ?? null;
+      // A real endgame_id means real-run data: re-derive the archetype +
+      // stamp and drop the demo-only card bits (Vellum's "25 YEARS FEDERAL"
+      // stamp and Tiger Global pivot were leaking onto real runs).
+      const idFam = (handoff.endgame_id ?? "").split("-")[1]?.toUpperCase();
+      const arch =
+        idFam && idFam in STAMP_BY_ARCHETYPE
+          ? (idFam as EndgameArchetype)
+          : null;
       setEndgame((prev) => ({
         ...prev,
         endgame_id: handoff.endgame_id ?? prev.endgame_id,
         title: handoff.title ?? prev.title,
+        ...(arch
+          ? {
+              archetype: arch,
+              stamp_text: handoff.verdict || STAMP_BY_ARCHETYPE[arch],
+              pivotal_event_title: "",
+              pivotal_event_outcome: "",
+              ended_at: new Date().toLocaleDateString("en-CA"),
+            }
+          : {}),
         company_name: company ? company.toUpperCase() : prev.company_name,
         company_one_liner:
           handoff.bible?.one_liner ?? prev.company_one_liner,
@@ -201,8 +223,14 @@ export function PostMortemScreen({ endgame: serverEndgame, runId }: Props) {
     );
   }, [endgame.tagline, endgame.company_name, flashToast]);
 
-  // visible portion of the long-read body — split on blank lines
-  const paragraphs = endgame.post_mortem_long_read
+  // visible portion of the long-read body — split on blank lines. An empty
+  // long-read (writer died mid-run) gets an honest note, not a blank page.
+  const paragraphs = (
+    endgame.post_mortem_long_read ||
+    "*The post-mortem writer never filed the story — the run ended, the " +
+      "verdict stands, but the long-read was lost in transit. The timeline " +
+      "on the run page remains the record.*"
+  )
     .split(/\n\n+/)
     .map((p) => p.trim())
     .filter(Boolean);

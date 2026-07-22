@@ -43,7 +43,11 @@ function formatDays(stats: { day: number }): string {
 function formatDate(iso: string): string {
   // "Apr 28, 2026" — Forbes-ish, ASCII safe.
   try {
-    const d = new Date(iso);
+    // Date-only strings parse as UTC midnight and render a day early in
+    // western timezones — pin them to local noon instead.
+    const d = /^\d{4}-\d{2}-\d{2}$/.test(iso)
+      ? new Date(`${iso}T12:00:00`)
+      : new Date(iso);
     return d
       .toLocaleDateString("en-US", {
         month: "short",
@@ -266,38 +270,42 @@ export const ShareCard = forwardRef<HTMLDivElement, Props>(function ShareCard(
         </div>
 
         {/* ── 7. THE MOMENT EVERYTHING WENT WRONG ──────────────── */}
-        <div style={{ marginTop: 30 }}>
-          <div
-            className="font-mono uppercase"
-            style={{
-              fontSize: 11,
-              letterSpacing: "0.12em",
-              color: "var(--alarm)",
-              fontWeight: 700,
-            }}
-          >
-            THE MOMENT EVERYTHING WENT WRONG · DAY{" "}
-            {dayForTurn(endgame.turn_when_things_went_wrong)}
-          </div>
-          <div
-            style={{
-              borderLeft: "1.4px solid var(--ink)",
-              paddingLeft: 14,
-              marginTop: 8,
-            }}
-          >
+        {/* Demo-only until the backend nominates a real pivot — real runs
+            pass an empty outcome and the section stays off the card. */}
+        {endgame.pivotal_event_outcome ? (
+          <div style={{ marginTop: 30 }}>
             <div
-              className="font-body"
+              className="font-mono uppercase"
               style={{
-                fontSize: 19,
-                lineHeight: 1.4,
-                color: "var(--ink)",
+                fontSize: 11,
+                letterSpacing: "0.12em",
+                color: "var(--alarm)",
+                fontWeight: 700,
               }}
             >
-              {endgame.pivotal_event_outcome}
+              THE MOMENT EVERYTHING WENT WRONG · DAY{" "}
+              {dayForTurn(endgame.turn_when_things_went_wrong)}
+            </div>
+            <div
+              style={{
+                borderLeft: "1.4px solid var(--ink)",
+                paddingLeft: 14,
+                marginTop: 8,
+              }}
+            >
+              <div
+                className="font-body"
+                style={{
+                  fontSize: 19,
+                  lineHeight: 1.4,
+                  color: "var(--ink)",
+                }}
+              >
+                {endgame.pivotal_event_outcome}
+              </div>
             </div>
           </div>
-        </div>
+        ) : null}
 
         {/* ── 8. TAGLINE ────────────────────────────────────────── */}
         <div

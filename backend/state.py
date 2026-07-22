@@ -309,12 +309,21 @@ class RunState:
         founders = bible.get("founders") or []
         f0 = founders[0] if founders and isinstance(founders[0], dict) else {}
         disp = co.get("display_name") or co.get("name") or "the company"
-        pretty = self.endgame_id.replace("END-", "").replace("-", " ").title()
+        # Resolve the corpus record so the card gets the real ending title and
+        # a stamp verdict — never the raw record id ('Fled 003').
+        try:
+            from corpus_loader import endgame_display  # type: ignore
+            eg = endgame_display(self.endgame_id)
+        except Exception:  # pragma: no cover
+            pretty = self.endgame_id.replace("END-", "").replace("-", " ").title()
+            eg = {"title": pretty, "verdict": pretty.upper(), "category": ""}
         return {
             "endgame_id": self.endgame_id,
-            "title": self.endgame_id,
+            "title": eg["title"],
+            "verdict": eg["verdict"],
+            "endgame_category": eg["category"],
             "final_headline": f"{disp} — closed.",
-            "tagline": f"{disp}: {pretty}.",
+            "tagline": f"{disp}: {eg['title']}.",
             "post_mortem_long_read": self.post_mortem_md,
             "company_name": disp,
             "one_liner": co.get("one_liner") or "",
