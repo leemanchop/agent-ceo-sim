@@ -188,7 +188,15 @@ export function AgentStream({
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-5 py-5">
+      <div
+        className="flex-1 overflow-y-auto px-5 py-5"
+        style={{
+          // Days-axis quiet mode: between beats the played-out card recedes
+          // while the calendar ticks and the feed carries the motion.
+          opacity: isAmbient && event ? 0.45 : 1,
+          transition: "opacity 600ms ease",
+        }}
+      >
         {/* researching (live-mode initial bible build) */}
         {phase === "researching" && (
           <div className="flex flex-col items-start gap-4 max-w-2xl">
@@ -226,13 +234,13 @@ export function AgentStream({
               style={{ fontSize: 13, color: "var(--soft)", lineHeight: 1.5 }}
             >
               {templateId
-                ? "no web research happens for presets. the historical record is hand-authored."
-                : "landing page, founder posts, recent press, podcast appearances. ~30-90 seconds. don't close the tab."}
+                ? "loading the hand-authored record. about a minute."
+                : "landing page, founder posts, recent press. usually 2–4 minutes. don't close the tab."}
             </div>
-            {/* Researcher log — visible scrolling list of every step the
-                Researcher emits. Only populated for uploaded runs (real
-                research); template runs collapse to a single fast beat. */}
-            {!templateId && researchLog && researchLog.length > 0 && (
+            {/* Live log — visible from second zero so the wait never looks
+                dead. Researcher steps AND showrunner episode progress both
+                land here (templates skip research but still script). */}
+            {(
               <div
                 className="font-mono mt-2 w-full animate-event-in"
                 style={{
@@ -255,10 +263,23 @@ export function AgentStream({
                     letterSpacing: "0.12em",
                   }}
                 >
-                  ▌ RESEARCHER · LIVE LOG
+                  ▌ LIVE LOG
                 </div>
-                {researchLog.map((entry, i) => {
-                  const isLast = i === researchLog.length - 1;
+                {(!researchLog || researchLog.length === 0) && (
+                  <div
+                    style={{
+                      borderLeft: "2px solid var(--alarm)",
+                      paddingLeft: 8,
+                      marginBottom: 3,
+                    }}
+                  >
+                    <span className="text-soft">system ›</span> connecting to
+                    the researcher…
+                    <span className="animate-blink ml-1">▌</span>
+                  </div>
+                )}
+                {(researchLog ?? []).map((entry, i) => {
+                  const isLast = i === (researchLog ?? []).length - 1;
                   return (
                     <div
                       key={`${entry.ts}-${i}`}
@@ -285,24 +306,6 @@ export function AgentStream({
                     </div>
                   );
                 })}
-              </div>
-            )}
-            {/* Compact single-line for template runs (no real research) */}
-            {templateId && researchProgress && (
-              <div
-                className="font-mono mt-2 animate-event-in"
-                style={{
-                  fontSize: 12,
-                  color: "var(--ink-2)",
-                  borderLeft: "2px solid var(--alarm)",
-                  paddingLeft: 10,
-                  paddingTop: 4,
-                  paddingBottom: 4,
-                }}
-              >
-                <span className="text-soft">researcher ›</span>{" "}
-                {researchProgress.step}
-                <span className="animate-blink ml-1">▌</span>
               </div>
             )}
             <div
@@ -675,8 +678,10 @@ export function AgentStream({
                   {event?.justification}
                 </div>
 
-                {/* tweet artifact card — X styling */}
-                {(phase === "consequences" || phase === "advancing") && (
+                {/* tweet artifact card — X styling; hidden when the CEO
+                    didn't tweet this turn (empty artifact) */}
+                {(phase === "consequences" || phase === "advancing") &&
+                  !!event?.artifact_tweet?.trim() && (
                   <div
                     className="mt-4 max-w-md font-x animate-event-in"
                     style={{
@@ -749,6 +754,14 @@ export function AgentStream({
                         </span>
                       </span>
                     ))}
+                    {event.effects_summary.find((e) => e.why)?.why && (
+                      <span
+                        className="basis-full font-body"
+                        style={{ fontSize: 11, color: "var(--soft)" }}
+                      >
+                        — {event.effects_summary.find((e) => e.why)?.why}
+                      </span>
+                    )}
                   </div>
                 )}
               </div>

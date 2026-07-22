@@ -157,7 +157,10 @@ export type SsePayloadByKind = {
     body: string;
     ts: string;
   };
+  "day.tick": { day: number; quiet?: boolean | null };
   "turn.mini": {
+    /** Stable per-(turn, index) id from the backend — timeline dedup key. */
+    mini_id?: string | null;
     kind: string;
     headline: string;
     stat_deltas?: Record<string, number>;

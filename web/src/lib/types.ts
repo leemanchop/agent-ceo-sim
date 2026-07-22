@@ -35,6 +35,8 @@ export type EffectChip = {
   label: string;
   value: string;
   tone: "good" | "bad" | "neutral";
+  /** One-line in-voice rationale from the Oracle ("Series B wire hit"). */
+  why?: string;
 };
 
 export type TimelineEntry = {

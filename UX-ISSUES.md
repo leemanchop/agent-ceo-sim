@@ -165,3 +165,153 @@ Reported by Nathan playing real-LLM runs locally (2026-07-20).
 - Severity: high (storytelling premise + defamation posture for real
   uploaded companies)
 - Status: fixed — pending live re-test
+
+## UX-8 — Run timeline always creates a duplicate log
+
+> "the run timeline always creates a duplicate log"
+
+- Diagnosis: mini-action timeline rows are deduped by an id minted as
+  `mini-${kind}-${Date.now()}` in the SSE adapter — every wire re-delivery
+  (EventSource auto-reconnect; the backend keeps no Last-Event-ID) gets a
+  fresh timestamp, so the dedup guard never matches and the row appends
+  again. Large-event rows key on the stable backend event_id and never
+  duplicated.
+- Fix: backend emits a stable `mini_id` (turn + index) on every turn.mini;
+  the adapter prefers it; the existing dedup guard now works.
+- Severity: high (also inflated the perceived event repetition)
+- Status: fixed — pending live re-test
+
+## UX-9 — Valuation makes no sense ("randomly shows 1.0B without context")
+
+> "the valuation never really makes a ton of sense - it will randomly show
+> 1.0B without any context given"
+> (ground truth: nologo.com run went $14M → $1,193,999,920 in 12 turns)
+
+- Diagnosis: stat deltas were 100% LLM-invented magnitudes with no bounds
+  (Stats.apply just adds); the authored `effects:` blocks on all 296
+  events were parsed nowhere; and the corpus is unit-inconsistent
+  (banking events use percents, hiring uses absolute USD). Bonus: the
+  server emitted the RAW delta in consequences.applied while applying a
+  clamped one — client dashboard drifted from server truth mid-turn.
+- Fix: effects parsed + unit-normalized per event (heat folds into
+  reputation; morale dropped); shortlist candidates now carry "AUTHORED
+  EFFECTS (anchor)" the Oracle must match in sign/magnitude; code-side
+  plausibility clamps (valuation ±40%/turn, ±3x only on XL/fundraising-
+  tagged events; proportional caps on cash/revenue/burn/headcount with
+  absolute floors); clamped deltas are what gets emitted; Oracle now
+  emits a one-line stat_rationale rendered under the RIPPLES chips.
+- Severity: high
+- Status: fixed — pending live re-test
+
+## UX-10 — Oracle events very repeated
+
+> "the oracle generated events are very repeated"
+
+- Diagnosis: the repetition guard was structurally dead — nothing told
+  the Oracle to echo the corpus record id, so TurnRecord stored invented
+  ids and `exclude_ids` never matched anything. Exclusion also only
+  looked back 8 turns. Late-game: the hard severity floor + prereq gates
+  collapsed the eligible pool to ~a dozen events. (DB ground truth showed
+  stored events were distinct — the FELT repetition is partly UX-8's
+  duplicate rows and partly same-category streaks.)
+- Fix: Oracle must set source_event_id = exact corpus id (schema +
+  prompt); TurnRecord stores it; exclusion is now run-wide by id AND
+  normalized title; severity floor became a soft scoring preference;
+  explicit variety rule (never repeat an event/arc; rotate categories).
+- Severity: high
+- Status: fixed — pending live re-test
+
+## UX-11 — Setup choices don't influence the run; runs don't feel customized
+
+> "the top bar ... need to be better correlated with the events ... the
+> setup in the beginning - when we select the type of founder, company,
+> etc. it should genuinely influence the types of events that occur ...
+> it still doesn't really make a ton of sense/feel deeply customized"
+
+- Diagnosis: industry had ZERO effect on selection (the filter keys on
+  industry_* tags that don't exist anywhere in the corpus — a no-op);
+  founder_vibe was never referenced in selection at all; craziness was
+  the only working lever. The Oracle also copies corpus event bodies
+  near-verbatim instead of adapting them to the company.
+- Fix: affinity scoring in the shortlist — industry maps through event
+  categories/tags, founder_vibe through a vibe→tags map (crypto_refugee
+  → crypto/banking/offshore, ex_mckinsey → board/governance, …);
+  mandatory ADAPTATION doctrine (corpus events are skeletons: product
+  noun, customers, rivals, buzzwords must be THIS company's); stat
+  changes correlate with events via UX-9's anchors + rationale line.
+  Feed chorus made fully fictional (@AccelDaemon, @readthecommit replace
+  real-person handles) per owner's either/or.
+- Severity: high
+- Status: fixed — pending live re-test
+
+## UX-13 — Blank founder-tweet box; misaligned founder fields on setup
+
+> "every time the agent makes a decision, the founder tweet box pops up at
+> the bottom even if it's blank, which probably shouldn't be the case. also
+> in the setup page the founder name and founder twitter urls are misaligned"
+
+- Diagnosis: (1) the tweet artifact card rendered on phase alone —
+  no check that artifact_tweet is non-empty; (2) the Field component
+  adds mt-4 via `first:mt-0` to all-but-first children — inside the
+  founder two-column grid row that pushed only the right column down.
+- Fix: tweet card gated on a non-empty artifact; grid row neutralizes
+  the Field margin (`[&>label]:mt-0`) and top-aligns items.
+- Severity: low
+- Status: fixed — pending live re-test
+
+## UX-14 — Post-mortem still "doing the vellum thing"
+
+> "i don't think the post mortem is accurate, it's just doing the vellum
+> thing."
+
+- Diagnosis: UX-5's localStorage handoff only works for the exact
+  browser+slug that played the run — archive links route by ULID
+  (different key), the long-read streams AFTER endgame.reached (click
+  through too early → missing), and the post-mortem markdown was never
+  persisted server-side, so every fallback path landed on demo copy.
+- Fix: endgame_id + post_mortem_md persist on the run and surface in the
+  snapshot's `endgame` block; the ULID/server fetch path now returns the
+  real long-read; the client hydration fetches by ULID when the handoff
+  lacks the markdown.
+- Severity: high (the post-mortem is the shareable payoff)
+- Status: fixed — pending live re-test
+
+## UX-15 — Make all modes a bit crazier
+
+> "make all the modes just a bit crazier in terms of potential events and
+> the choices that the agent makes."
+
+- Fix (script generator): endgame weights one notch spicier per band
+  (normal now sends ~25% of runs to PRISON/FLED); L/XL severities unlock
+  earlier in every mode AND the severity preference is now a hard
+  restriction when satisfiable (runs previously came out all-S/M —
+  verified 26/72 larges land L/XL post-fix); events from one craziness
+  band UP are eligible with a score bonus (normal runs catch crazy
+  events — verified 1-4 per short run); events that plant seeds score
+  higher so the gated back-half unlocks; CEO pick-tone cycle leans
+  unhinged (6/12 picks) and the prose doctrine adds "THE CEO IS RISK-ON".
+- Status: shipped — tune further after play
+
+## UX-16/17/18 — Post-mortem by ULID; unpredictable picks; FBI reachable everywhere
+
+> "the post mortem still doesn't work... it's kind of obvious what choice
+> the agent is going to make... there shouldddd be a way for the fbi tab
+> to get unlocked even in micro/short mode"
+
+- UX-16 (post-mortem): root disease was slug-routing — every prior fix
+  was a bandage over slug≠ULID. The run page now navigates to
+  /run/{ULID}/post-mortem (backendRunId threaded through the endgame
+  modal/strip), so the page's server fetch hits the real run + persisted
+  long-read directly. Slug links keep the handoff fallback.
+- UX-17 (predictability): choice tones were positional (A=unhinged...)
+  and the pick followed a cycle. Choices now shuffle per beat (ids
+  relabeled in display order) and the pick is weighted dice per beat —
+  normal mode lands the craziest option ~40%. Verified: unhinged tone
+  spread across all three slots; distribution felt, not callable.
+- UX-18 (FBI dead in short runs): awareness had no income stream outside
+  gated federal events. Heat coupling: fraud GAINS leak 0.6x into
+  awareness, and accumulated fraud >= 8 drips fraud//8 per large beat
+  (micro compresses to //4). Verified crossings of the 20-unlock:
+  short/normal 4/8, short/crazy 7/8, micro 2/8 — reachable everywhere,
+  guaranteed nowhere; clean runs stay dark.
+- Status: shipped — pending live re-test

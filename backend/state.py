@@ -253,6 +253,19 @@ class RunState:
     # Cancellation hook for long streams.
     cancelled: bool = False
 
+    # Pregenerated run script (Phase 2, spectate). `script` is the RunScript
+    # dict from showrunner.generate_script; `script_cursor` is the index of
+    # the next unplayed beat — playback resumes here after any reconnect.
+    # Both are dataclass fields so _state_to_blob's asdict() persists them.
+    script: Optional[Dict[str, Any]] = None
+    script_cursor: int = 0
+
+    # Endgame outcome — persisted so the post-mortem page can fetch the
+    # REAL long-read by run id instead of falling back to demo copy
+    # (UX-14: "it's just doing the vellum thing").
+    endgame_id: str = ""
+    post_mortem_md: str = ""
+
     def ensure_decision_queue(self) -> asyncio.Queue:
         """Lazily create the decision queue inside the running event loop."""
         if self.decision_queue is None:
@@ -291,8 +304,25 @@ class RunState:
         return {
             "run_id": self.run_id,
             "status": self.status,
-            "company": self.bible,
+            # Flat company summary — the frontend's RunSnapshot type expects
+            # display_name/founder at this level; the nested research bible
+            # rides alongside for consumers that want depth (UX-16: the
+            # post-mortem page read undefined off the nested shape).
+            "company": (lambda b: (lambda c, f: {
+                "name": c.get("name"),
+                "display_name": c.get("display_name") or c.get("name"),
+                "one_liner": c.get("one_liner"),
+                "industry": c.get("industry"),
+                "founder": (f[0].get("name") if f and isinstance(f[0], dict) else None),
+            })((b.get("company") or {}) if isinstance(b, dict) else {},
+               (b.get("founders") or []) if isinstance(b, dict) else []))(self.bible or {}),
+            "bible": self.bible,
             "settings": self.settings,
+            "endgame_id": self.endgame_id or None,
+            "endgame": ({
+                "endgame_id": self.endgame_id,
+                "post_mortem_long_read": self.post_mortem_md,
+            } if self.endgame_id else None),
             "stats": self.stats.snapshot(),
             "stat_history": [
                 {"turn": t.turn, "day": t.day, "stats": {}} for t in self.turns

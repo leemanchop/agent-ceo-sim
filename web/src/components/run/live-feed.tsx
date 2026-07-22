@@ -1,23 +1,30 @@
 "use client";
 
 import { useState } from "react";
-import type { FeedEntry } from "@/lib/types";
+import type { FeedEntry, Stats, TimelineEntry } from "@/lib/types";
 import { Star } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-const TABS = [
-  { id: "feed", label: "Feed", active: true, locked: false },
-  { id: "fbi", label: "FBI 🔒", active: false, locked: true },
-] as const;
+import { FbiPane } from "./fbi-file";
 
 export function LiveFeed({
   entries,
   speed = 1,
+  fbiUnlocked = false,
+  stats,
+  timeline = [],
 }: {
   entries: FeedEntry[];
   speed?: 1 | 2 | 4;
+  /** Unlocks the FBI tab (latched by the run page at awareness >= 20). */
+  fbiUnlocked?: boolean;
+  stats?: Stats;
+  timeline?: TimelineEntry[];
 }) {
   const [activeTab, setActiveTab] = useState<string>("feed");
+  const TABS = [
+    { id: "feed", label: "Feed", locked: false },
+    { id: "fbi", label: fbiUnlocked ? "FBI 🔓" : "FBI 🔒", locked: !fbiUnlocked },
+  ];
 
   // The cockpit feeds `entries` incrementally — in live mode SSE pushes one
   // at a time; in mock mode the canned 30-entry list arrives at once and we
@@ -69,13 +76,17 @@ export function LiveFeed({
         ))}
       </div>
 
-      <div className="flex-1 overflow-y-auto">
-        <ol>
-          {visible.map((e) => (
-            <FeedItem key={e.id} entry={e} />
-          ))}
-        </ol>
-      </div>
+      {activeTab === "fbi" && fbiUnlocked && stats ? (
+        <FbiPane stats={stats} timeline={timeline} />
+      ) : (
+        <div className="flex-1 overflow-y-auto">
+          <ol>
+            {visible.map((e) => (
+              <FeedItem key={e.id} entry={e} />
+            ))}
+          </ol>
+        </div>
+      )}
     </div>
   );
 }

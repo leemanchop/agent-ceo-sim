@@ -60,6 +60,7 @@ export function PostMortemScreen({ endgame: serverEndgame, runId }: Props) {
       const raw = localStorage.getItem(`aces:run:${runId}:postmortem`);
       if (!raw) return;
       const handoff = JSON.parse(raw) as {
+        run_id?: string;
         endgame_id?: string;
         title?: string;
         post_mortem_long_read?: string;
@@ -88,6 +89,30 @@ export function PostMortemScreen({ endgame: serverEndgame, runId }: Props) {
           handoff.post_mortem_long_read ?? prev.post_mortem_long_read,
         tagline: handoff.tagline ?? prev.tagline,
       }));
+      // The long-read streams AFTER endgame.reached — if the user clicked
+      // through before it finished, the handoff lacks it. The backend now
+      // persists it on the run, so fetch by ULID as a fallback (UX-14).
+      if (!handoff.post_mortem_long_read && handoff.run_id) {
+        const mode = process.env.NEXT_PUBLIC_API_MODE;
+        const url = process.env.NEXT_PUBLIC_API_URL;
+        const base =
+          mode === "local"
+            ? (url ?? "http://localhost:8000").replace(/\/+$/, "")
+            : mode === "prod" && url
+            ? url.replace(/\/+$/, "")
+            : null;
+        if (base) {
+          fetch(`${base}/run/${encodeURIComponent(handoff.run_id)}`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((snap) => {
+              const md = snap?.endgame?.post_mortem_long_read;
+              if (md) {
+                setEndgame((prev) => ({ ...prev, post_mortem_long_read: md }));
+              }
+            })
+            .catch(() => {});
+        }
+      }
     } catch {
       /* corrupt entry — keep server fallback */
     }

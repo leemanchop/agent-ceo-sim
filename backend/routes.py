@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import queue as thread_queue
 import random
 import re
@@ -47,6 +48,87 @@ def install_routes(api: Any) -> None:  # api: FastAPI
         persist_run,
     )
     import run_store  # type: ignore
+
+    # Phase 2 scripted engine — optional until showrunner/playback land.
+    # Guarded import keeps the live engine fully functional without them,
+    # and ACES_SCRIPTED=0 is the kill switch back to the live engine.
+    try:
+        from showrunner import generate_script  # type: ignore
+        from playback import stream_script  # type: ignore
+        _scripted_available = True
+    except Exception:
+        generate_script = None  # type: ignore
+        stream_script = None  # type: ignore
+        _scripted_available = False
+
+    def _scripted_enabled(state) -> bool:
+        if not _scripted_available or state.interactive:
+            return False
+        if os.environ.get("ACES_SCRIPTED", "1") == "0":
+            return False
+        return bool((state.settings or {}).get("scripted", True))
+
+    async def _generate_script_events(state) -> AsyncGenerator[str, None]:
+        """Run showrunner generation, yielding progress as researcher.*
+        SSE lines the existing loading UI already renders. On any failure
+        the run falls back to the live engine (state.script stays None)."""
+        q: asyncio.Queue = asyncio.Queue()
+
+        async def on_event(kind: str, data: Dict[str, Any]) -> None:
+            await q.put((kind, data))
+
+        async def runner():
+            try:
+                script = await generate_script(
+                    state, on_event=on_event,
+                    persist_cb=lambda: persist_run(state.run_id),
+                )
+                state.script = script
+                persist_run(state.run_id)
+            except Exception:
+                traceback.print_exc()
+            finally:
+                state._script_inflight = False  # type: ignore[attr-defined]
+                await q.put(("__done__", None))
+
+        # Reconnect-safety (same disease as the researcher double-billing):
+        # a generation is already running for this run — wait on it instead
+        # of spawning a second Sonnet episode writer.
+        if getattr(state, "_script_inflight", False):
+            for _ in range(240):
+                await asyncio.sleep(2.0)
+                if state.script or not getattr(state, "_script_inflight", False):
+                    return
+                yield ": ping\n\n"
+            return
+        state._script_inflight = True  # type: ignore[attr-defined]
+
+        task = asyncio.create_task(runner())
+        try:
+            while True:
+                try:
+                    kind, data = await asyncio.wait_for(q.get(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"
+                    continue
+                if kind == "__done__":
+                    break
+                if kind == "script.progress":
+                    d = data or {}
+                    yield sse("researcher.searching", {
+                        "query": f"showrunner: {d.get('stage', 'writing')} "
+                                 f"{d.get('episode', '')}"
+                                 f"{'/' + str(d.get('of')) if d.get('of') else ''}",
+                        "step": 5, "of": 6,
+                    })
+                else:
+                    yield sse(kind, data)
+        finally:
+            if not task.done():
+                # generation continues in background (later episodes) — the
+                # returned script object is already on state once episode 1
+                # lands; do not cancel.
+                pass
 
     def sse(event: str, data: Any) -> str:
         return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
@@ -95,6 +177,12 @@ def install_routes(api: Any) -> None:  # api: FastAPI
         # payload.user_id or payload.settings.user_id — both shapes are
         # accepted for forward-compat with the auth-agent's PR.
         state = create_run(payload)
+        try:
+            run_store.record_submission(
+                state.run_id, state.company_input, state.mode,
+            )
+        except Exception:
+            pass
         return {
             "run_id": state.run_id,
             "status": state.status,
@@ -118,6 +206,44 @@ def install_routes(api: Any) -> None:  # api: FastAPI
         if not state:
             raise HTTPException(404, "run not found")
         return state.snapshot()
+
+    # TODO: gate behind admin auth before public launch (same as /usage).
+    @api.get("/admin/submissions")
+    async def admin_submissions(format: str = "json", limit: int = 5000, token: str = ""):
+        _require_admin(token)
+        """Owner lead-capture export: every company/founder/handle players
+        have submitted. ?format=csv downloads a spreadsheet-ready file."""
+        rows = run_store.list_submissions(limit=limit)
+        if format != "csv":
+            return {"count": len(rows), "submissions": rows}
+        import csv
+        import io
+        buf = io.StringIO()
+        cols = ["ts", "run_id", "mode", "company_name", "one_liner",
+                "industry", "founder_vibe", "founder", "founder_handle"]
+        w = csv.DictWriter(buf, fieldnames=cols)
+        w.writeheader()
+        for r in rows:
+            w.writerow(r)
+        from fastapi.responses import Response
+        return Response(
+            content=buf.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition":
+                     "attachment; filename=30u30-submissions.csv"},
+        )
+
+    # TODO: gate behind admin auth before public launch (same as /usage).
+    @api.get("/run/{run_id}/script")
+    async def run_script_dump(run_id: str, token: str = ""):
+        """Debug/admin: the full pregenerated RunScript (Phase 2)."""
+        _require_admin(token)
+        state = get_run(run_id)
+        if not state:
+            raise HTTPException(404, "run not found")
+        if not state.script:
+            raise HTTPException(404, "run has no script (live-engine run?)")
+        return {"script": state.script, "cursor": state.script_cursor}
 
     @api.get("/run/{run_id}/bible")
     async def run_bible(run_id: str):
@@ -181,6 +307,9 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                 _apply_bible_to_initial_stats(state)
                 persist_run(state.run_id)
                 yield sse("researcher.bible_complete", {"bible": bible})
+                if _scripted_enabled(state) and not state.script:
+                    async for chunk in _generate_script_events(state):
+                        yield chunk
                 state.status = "streaming"
                 yield sse("stream.open", {
                     "version": "1.0.0",
@@ -197,6 +326,9 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                 # Research already finished — a reconnect just needs the
                 # terminal events to proceed to /stream.
                 yield sse("researcher.bible_complete", {"bible": state.bible})
+                if _scripted_enabled(state) and not state.script:
+                    async for chunk in _generate_script_events(state):
+                        yield chunk
                 state.status = "streaming"
                 yield sse("stream.open", {
                     "version": "1.0.0", "first_turn_in_seconds": 2,
@@ -237,6 +369,30 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                     state.bible_yaml_raw = json.dumps(bible, indent=2)
                     _apply_bible_to_initial_stats(state)
                     persist_run(state.run_id)
+                    if _scripted_enabled(state) and not state.script \
+                            and not getattr(state, "_script_inflight", False):
+                        state._script_inflight = True  # type: ignore[attr-defined]
+                        async def _fwd(kind: str, data: Dict[str, Any]) -> None:
+                            if kind == "script.progress":
+                                d = data or {}
+                                await queue.put(("researcher.searching", {
+                                    "query": f"showrunner: {d.get('stage', 'writing')} "
+                                             f"{d.get('episode', '')}"
+                                             f"{'/' + str(d.get('of')) if d.get('of') else ''}",
+                                    "step": 5, "of": 6,
+                                }))
+                            else:
+                                await queue.put((kind, data))
+                        try:
+                            state.script = await generate_script(
+                                state, on_event=_fwd,
+                                persist_cb=lambda: persist_run(state.run_id),
+                            )
+                            persist_run(state.run_id)
+                        except Exception:
+                            traceback.print_exc()  # fall back to live engine
+                        finally:
+                            state._script_inflight = False  # type: ignore[attr-defined]
                     state.status = "streaming"
                     await queue.put(("stream.open", {
                         "version": "1.0.0",
@@ -339,6 +495,38 @@ def install_routes(api: Any) -> None:  # api: FastAPI
             yield sse("stream.open", {
                 "version": "1.0.0", "first_turn_in_seconds": 1,
             })
+            # ---- Phase 2: scripted playback (spectate) ----------------
+            # The script was pregenerated at /start; playback just streams
+            # it over the same SSE contract. Endgame emission stays here.
+            if state.script and _scripted_enabled(state):
+                try:
+                    async for chunk in stream_script(
+                        state,
+                        sse=sse,
+                        persist_run=persist_run,
+                        run_store=run_store,
+                        emit_achievements=_emit_achievements,
+                        gap_for_speed=_gap_for_speed,
+                        feed_event_kind=_feed_event_kind,
+                        feed_payload=_feed_payload,
+                        founder_handle=_founder_handle,
+                        founder_name=_founder_name,
+                        system_error_sse=_system_error_sse,
+                    ):
+                        yield chunk
+                except asyncio.CancelledError:
+                    return
+                except Exception:
+                    print(f"[playback] run={state.run_id} died:")
+                    traceback.print_exc()
+                    yield _system_error_sse(
+                        "the projector jammed — the reel is safe, refresh to resume",
+                    )
+                    return
+                if not state.cancelled and state.status not in ("abandoned",):
+                    async for chunk in _emit_endgame(state, sse):
+                        yield chunk
+                return
             try:
                 while not state.cancelled and state.turn < state.max_turns():
                     # Pause handling: yield only keepalives until unpaused.
@@ -456,10 +644,17 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                             "tags": event_card.get("tags", []),
                         })
                         atms = oracle_out.get("atmospheric") or []
+                        _mini_idx = 0
                         for atm in (atms if isinstance(atms, list) else []):
                             if not isinstance(atm, dict):
                                 continue  # model emitted a bare string beat
+                            _mini_idx += 1
                             yield sse("turn.mini", {
+                                # Stable per-(turn, index) id — the frontend
+                                # dedupes timeline rows on it, so SSE
+                                # re-delivery after a reconnect no longer
+                                # duplicates mini rows (UX-8).
+                                "mini_id": f"mini-{state.turn}-{_mini_idx}",
                                 "kind": atm.get("kind", "atmospheric"),
                                 "headline": _resolve_slots(atm.get("headline", ""), slots, state.run_id),
                                 "stat_deltas": atm.get("stat_deltas", {}),
@@ -649,6 +844,8 @@ def install_routes(api: Any) -> None:  # api: FastAPI
 
                         # ---- 5) Apply consequences ----
                         deltas = oracle_out.get("stats_deltas", {}) or {}
+                        if isinstance(deltas, dict):
+                            deltas = _clamp_deltas(dict(deltas), state.stats, event_card)
                         state.stats.apply(deltas)  # coerces junk values internally
                         fs = oracle_out.get("foreshadow_updates", {}) or {}
                         if not isinstance(fs, dict):
@@ -670,7 +867,9 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                         rec = TurnRecord(
                             turn=state.turn,
                             day=state.stats.day,
-                            event_id=event_card.get("id", f"EVT-{state.turn:03d}"),
+                            event_id=(event_card.get("source_event_id")
+                                      or event_card.get("id")
+                                      or f"EVT-{state.turn:03d}"),
                             event_title=event_card.get("title", ""),
                             event_body=event_card.get("body", ""),
                             severity=event_card.get("severity", "S"),
@@ -709,8 +908,27 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                                 "ts": _ts_now(),
                             })
 
+                        rationale = _as_str(oracle_out.get("stat_rationale")).strip()
+                        chips = []
+                        if isinstance(deltas, dict):
+                            for k, v in deltas.items():
+                                if k == "day" or not isinstance(v, int) or v == 0:
+                                    continue
+                                label = k.replace("_", " ")
+                                val = (f"{'+' if v > 0 else ''}{v/1_000_000:.1f}M"
+                                       if k in ("valuation", "cash", "revenue", "burn")
+                                       and abs(v) >= 1_000_000
+                                       else f"{'+' if v > 0 else ''}{v}")
+                                chips.append({
+                                    "label": label,
+                                    "value": val,
+                                    "tone": "bad" if (v < 0) == (k not in ("burn", "fbi_awareness", "fraud_score")) else "good",
+                                    **({"why": rationale} if rationale else {}),
+                                })
                         yield sse("consequences.applied", {
                             "stat_deltas": deltas,
+                            "effects_summary": chips,
+                            "stat_rationale": rationale,
                             "seeds_planted": rec.seeds_planted,
                             "seeds_paid_off": rec.seeds_paid_off,
                             "next_event_in_seconds": _gap_for_speed(state.speed),
@@ -866,6 +1084,68 @@ def _last_ceo_commit_for_oracle(state):
         "justification": t.justification,
         "tweet": t.artifact_tweet,
     }
+
+
+
+# Relaxed-cap tags: events where big money swings are the point.
+_BIG_SWING_TAGS = {
+    "fundraising", "term_sheet", "funding_round", "down_round", "acquisition",
+    "ipo", "bank_run", "wipeout", "valuation", "capital",
+}
+
+
+def _clamp_deltas(deltas: Dict[str, Any], stats, event_card: Dict[str, Any]) -> Dict[str, int]:
+    """Plausibility caps on LLM-authored stat deltas (UX-9: '$1.0B out of
+    nowhere'). Proportional to current stats, severity- and tag-aware:
+    ordinary events move money stats by tens of percent; only XL or
+    fundraising/collapse-tagged events may move them by multiples. Absolute
+    floors keep zero-stats movable. reputation/fbi/fraud/day already clamp
+    in Stats.apply."""
+    if not isinstance(deltas, dict):
+        return {}
+    sev = (event_card.get("severity") or "S") if isinstance(event_card, dict) else "S"
+    tags = set(event_card.get("tags") or []) if isinstance(event_card, dict) else set()
+    big = sev == "XL" or bool({t.lower().lstrip("#") for t in tags if isinstance(t, str)} & _BIG_SWING_TAGS)
+
+    def cap(key: str, current: int, lo_mult: float, hi_mult: float,
+            lo_big: float, hi_big: float, floor_abs: int) -> None:
+        v = deltas.get(key)
+        from state import _coerce_delta  # local import; tiny helper
+        iv = _coerce_delta(v)
+        if iv is None:
+            deltas.pop(key, None)
+            return
+        # Corpus/model convention: tiny magnitudes on money stats are
+        # percents, not dollars ("valuation: -40" means -40%, and a -$40
+        # delta is meaningless anyway). Scale them before capping.
+        if key != "headcount" and 0 < abs(iv) <= 100 and current >= 1000:
+            iv = int(current * iv / 100)
+        lo_m, hi_m = (lo_big, hi_big) if big else (lo_mult, hi_mult)
+        # Floor widens the UPWARD bound only — see showrunner._cap_beat_deltas.
+        lo = int(current * lo_m)
+        hi = max(int(current * hi_m), floor_abs)
+        deltas[key] = max(lo, min(hi, iv))
+
+    cap("valuation", stats.valuation, -0.40, 0.40, -0.90, 3.0, 5_000_000)
+    cap("cash",      stats.cash,      -0.50, 1.00, -1.00, 10.0, 1_000_000)
+    cap("revenue",   stats.revenue,   -0.30, 0.30, -1.00, 2.0, 200_000)
+    cap("burn",      stats.burn,      -0.50, 0.50, -1.00, 1.0, 100_000)
+    cap("headcount", stats.headcount, -0.50, 0.50, -0.90, 2.0, 5)
+    return {k: v for k, v in deltas.items() if isinstance(v, (int, float)) or v is not None}
+
+
+
+def _require_admin(token: str) -> None:
+    """Gate admin surfaces behind ACES_ADMIN_TOKEN (Modal secret 'admin').
+    Unset expected token (local dev) leaves them open. NOTE: plain `?token=`
+    query param — fastapi Request injection breaks under `from __future__
+    import annotations` with function-local imports (422s)."""
+    from fastapi import HTTPException as _HTTPException
+    expected = os.environ.get("ACES_ADMIN_TOKEN", "")
+    if not expected:
+        return
+    if token != expected:
+        raise _HTTPException(403, "admin token required")
 
 
 def _slot_map(state) -> Dict[str, str]:
@@ -1054,8 +1334,8 @@ def _feed_event_kind(reaction: Dict[str, Any]) -> str:
 _CHORUS_FALLBACK = [
     ("@litcapital", "lit capital"),
     ("@AnonVCs", "Anonymous VC"),
-    ("@openspec", "openspec"),
-    ("@BasedBeffJezos", "Beff Jezos — e/acc"),
+    ("@readthecommit", "read the commit"),
+    ("@AccelDaemon", "Accel Daemon (e/acc)"),
     ("@founderhustleculture", "Founder Hustle Culture"),
     ("@AGIEnjoyer", "AGI Enjoyer"),
 ]
@@ -1140,16 +1420,21 @@ def _apply_bible_to_initial_stats(state) -> None:
     p = presets.get(stage, presets["seed"])
 
     def _researched(field: str):
-        """Researcher-grounded value: int when the bible carries the field
-        (0 = 'couldn't find it' per UX-1 — surfaced as 0, not a fake preset);
-        None when the field is absent entirely (pre-UX-1 bibles, templates)."""
+        """Researcher-grounded value, or None to fall back to the stage
+        preset. 0 means 'couldn't find it' (UX-1) — for revenue that's a
+        real answer (pre-revenue company); for valuation/headcount a 0
+        renders the whole dashboard dead (observed: a \$0-valuation story
+        arc), so 0 falls back to the preset there."""
         v = company.get(field)
         if v is None:
             return None
         try:
-            return max(0, int(v))
+            iv = max(0, int(v))
         except (TypeError, ValueError):
             return None
+        if iv == 0 and field in ("estimated_valuation_usd", "headcount"):
+            return None
+        return iv
 
     rv = _researched("estimated_valuation_usd")
     rh = _researched("headcount")
@@ -1327,6 +1612,14 @@ def _pick_endgame(state):
     except Exception:
         return ("END-FALLBACK-001",
                 "The run ended quietly. The chorus moved on.")
+    # Scripted runs chose their destination up front — honor it so the
+    # post-mortem matches the story that was actually told.
+    script = getattr(state, "script", None)
+    if isinstance(script, dict) and script.get("endgame_id"):
+        target = script["endgame_id"]
+        for eg in corpus.endgames:
+            if eg.record_id == target:
+                return (eg.record_id, eg.raw_markdown)
     if not corpus.endgames:
         return ("END-FALLBACK-001",
                 "The run ended quietly. The chorus moved on.")
@@ -1361,6 +1654,7 @@ async def _emit_endgame(state, sse):
 
     endgame_id, endgame_body = _pick_endgame(state)
     state.status = "completed"
+    state.endgame_id = endgame_id
     # Persist endgame_id + ended_at + completed status. Both calls are
     # idempotent — end_run() flips the row, persist_run() flushes the latest
     # in-memory snapshot (final stats, achievements, etc.) to the state blob.
@@ -1439,6 +1733,15 @@ async def _emit_endgame(state, sse):
         if ev.get("type") == "post_mortem.delta":
             yield sse("post_mortem.delta", {"text": ev.get("text", "")})
         elif ev.get("type") == "post_mortem.complete":
+            # Persist the long-read so the post-mortem page can fetch the
+            # real text by run id (archive links, other devices, cleared
+            # localStorage — every path that used to get demo copy).
+            state.post_mortem_md = ev.get("markdown", "") or ""
+            try:
+                from state import persist_run as _persist2  # type: ignore
+                _persist2(state.run_id)
+            except Exception:
+                pass
             yield sse("post_mortem.complete", {
                 "markdown": ev.get("markdown", ""),
                 "endgame_id": endgame_id,

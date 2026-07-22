@@ -104,8 +104,20 @@ PER TURN, YOUR JOB IS:
    payoff window and seeds going stale — these have priority.
 2) From the world corpus, FILTER by:
      length_eligibility ∩ craziness_band ∩ severity_ramp ∩ cooldown ∩ prereqs
-3) SELECT one main event by weighted sample. Apply slot fills from the bible.
-   Respect cameo_locks from existing seeds.
+3) SELECT one main event — STRONGLY prefer an unused PRIORITY CANDIDATE
+   (they are pre-filtered and carry full text + authored effects). NEVER
+   fire the same corpus event or a near-duplicate arc twice in one run;
+   the ALREADY-USED list is law. Vary categories: if the last two events
+   share a category, pick a different one this turn.
+   Set `event_card.source_event_id` to the EXACT record id of the corpus
+   event you built the turn from (e.g. "EVT-BF-001"); it is how the
+   repetition guard works. Only omit it for a fully original event.
+3b) ADAPT, never copy: the corpus event is a SKELETON. Rewrite the body so
+   every specific is THIS company's — product noun from
+   bible.product.category_noun, customers from customer_archetype, rivals
+   from bible.market.competitors, buzzwords from the bible's product
+   register. Generic corpus phrasing reaching the screen verbatim is a
+   failure. Respect cameo_locks from existing seeds.
 4) GENERATE the event card: 1-3 sentence Oracle-voice description + 2-4 player
    choices. Each choice has an `id` (single uppercase letter), a short `label`,
    and a `tone` ∈ {{"unhinged", "midwit", "rare-cucked", "based"}}.
@@ -123,16 +135,25 @@ PER TURN, YOUR JOB IS:
    Pull from Greek-chorus parody handles for any accusatory beat. Real-named
    figures only react.
    EVERY twitter/discord reaction MUST carry a `handle` AND `name` — an
-   unnamed account breaks the feed. Use the FIG-CHORUS cast from the corpus
-   as your recurring ensemble (e.g. @litcapital, @TrungTPhan, @VCBrags,
-   @AnonVCs, @BasedBeffJezos, @openspec, @ParodyMarc, @AGIEnjoyer) — the
-   same voices recurring across turns is what makes the feed feel alive.
-   Match the handle to the beat (e/acc voice for AI beats, engineer-cynic
-   for demo/wrapper beats, finance-meme for fundraising beats).
+   unnamed account breaks the feed. Your recurring ensemble is the
+   FICTIONAL chorus cast (never real people's accounts): @litcapital,
+   @AnonVCs, @VCBrags, @founderhustleculture, @AGIEnjoyer, @rotineconomy,
+   @AccelDaemon, @readthecommit. The same voices recurring across turns is
+   what makes the feed feel alive. Match the voice to the beat (e/acc
+   optimism for AI beats, engineer-cynic "show me the repo" for
+   demo/wrapper beats, finance-meme for fundraising beats). Real-named
+   figures from the cast may CAMEO in reactions (safe_reaction only) but
+   are never the recurring ensemble.
 7) UPDATE the foreshadow tracker: plant new seeds, mark paid-off seeds,
    re-roll or expire stragglers.
-8) COMPUTE stats deltas from the event's effects + general consequences. Stats
-   keys: valuation (USD), cash (USD), revenue (USD/mo), burn (USD/mo),
+8) COMPUTE stats deltas. When the chosen candidate carries AUTHORED
+   EFFECTS, your stats_deltas MUST match them in sign and rough magnitude
+   (scale percents against current stats). No anchor -> stay proportionate:
+   ordinary turns move valuation/cash/revenue/burn by at most tens of
+   percent; only XL fundraising/acquisition/collapse events justify
+   multiples. Also emit `stat_rationale`: ONE short in-voice line naming
+   why the numbers moved ("Series B wire hit; burn up on the new office").
+   Stats keys: valuation (USD), cash (USD), revenue (USD/mo), burn (USD/mo),
    headcount (int), reputation (-100..100), fbi_awareness (0..100),
    fraud_score (0..100), day (int — increments by 7-21).
 
@@ -145,6 +166,7 @@ For reference, the tool's input has this shape:
 {{
   "event_card": {{
     "id": "EVT-...",
+    "source_event_id": "EVT-... (the exact corpus record id this turn is built from)",
     "category": "FUNDRAISING|PRODUCT|HIRING|REGULATORY|PRESS|CUSTOMERS|FOUNDER|CRYPTO_AI|OPERATIONS|BANKING|FBI",
     "severity": "S|M|L|XL",
     "title": "...",
@@ -214,6 +236,10 @@ ORACLE_TOOL: Dict[str, Any] = {
                 "additionalProperties": True,
                 "properties": {
                     "id": {"type": "string"},
+                    "source_event_id": {
+                        "type": "string",
+                        "description": "EXACT corpus record id this event is built from (e.g. EVT-BF-001). Omit only for fully original events.",
+                    },
                     "category": {"type": "string"},
                     "severity": {"type": "string", "enum": ["S", "M", "L", "XL"]},
                     "title": {"type": "string"},
@@ -276,6 +302,10 @@ ORACLE_TOOL: Dict[str, Any] = {
                         "body": {"type": "string"},
                     },
                 },
+            },
+            "stat_rationale": {
+                "type": "string",
+                "description": "One short in-voice line explaining why the stats moved this turn.",
             },
             "stats_deltas": {
                 "type": "object",
@@ -349,6 +379,34 @@ def _last_turns_summary(state: RunState, k: int = 3) -> str:
     return "\n".join(out)
 
 
+
+# Onboarding-choice → event affinity. The corpus has no industry_* tags, so
+# industry maps through event CATEGORIES (EVT-<CAT>-*) and tags; founder_vibe
+# maps through tags. Used as soft scoring in _candidate_shortlist.
+_INDUSTRY_AFFINITY = {
+    "ai_app":         ({"PE", "CA"}, {"wrapper", "agi_claim", "model_brittle", "demo_fraud", "ai"}),
+    "ai_infra":       ({"PE", "CA"}, {"wrapper", "model_brittle", "gpu", "infra"}),
+    "dev_tools":      ({"PE", "CS"}, {"product", "launch", "open_source"}),
+    "fintech":        ({"BF", "CS"}, {"banking", "yield_product", "round_tripping", "compliance"}),
+    "crypto":         ({"BF", "CA"}, {"crypto", "token", "offshore", "banking"}),
+    "biotech":        ({"PE", "LR"}, {"regulatory", "clinical", "demo_fraud"}),
+    "enterprise_saas": ({"CS", "BF"}, {"revenue_recognition", "channel_stuffing", "enterprise"}),
+    "consumer_social": ({"PR", "CS"}, {"growth_hack", "metrics", "press"}),
+    "dtc":            ({"CS", "OO"}, {"supply_chain", "inventory", "customers"}),
+    "hardware":       ({"PE", "OO"}, {"supply_chain", "demo_fraud", "manufacturing"}),
+    "defense":        ({"LR", "PR"}, {"regulatory", "government", "compliance"}),
+    "climate":        ({"FR", "LR"}, {"regulatory", "subsidy", "greenwash"}),
+}
+_VIBE_AFFINITY = {
+    "stanford_dropout":   {"product", "wrapper", "founder_behavior", "demo_fraud"},
+    "ex_mckinsey":        {"enterprise", "board", "revenue_recognition", "governance"},
+    "crypto_refugee":     {"crypto", "banking", "token", "offshore"},
+    "nepo_baby":          {"fundraising", "press", "founder_behavior"},
+    "genuine_believer":   {"product", "press", "customers"},
+    "second_time_founder": {"fundraising", "governance", "board"},
+}
+
+
 def _candidate_shortlist(state: RunState, *, size: int = 16) -> str:
     """Build a per-run-varied shortlist of candidate events for the Oracle.
 
@@ -365,17 +423,35 @@ def _candidate_shortlist(state: RunState, *, size: int = 16) -> str:
     """
     try:
         corpus = get_corpus()
-        company = (state.bible or {}).get("company", {}) or {}
-        industry = company.get("industry")
-        recent_ids = [t.event_id for t in state.turns[-8:]]
+        bible = state.bible or {}
+        company = bible.get("company", {}) or {}
+        industry = (company.get("industry") or "").lower()
+        founders = bible.get("founders") or []
+        vibe = ""
+        if founders and isinstance(founders[0], dict):
+            vibe = (founders[0].get("persona_vibe") or "").lower()
+        # Run-wide exclusion by id AND title — ids alone were unreliable
+        # (the Oracle sometimes displays adapted ids), and the old [-8:]
+        # window let early events return late in long runs.
+        used_ids = {t.event_id for t in state.turns if t.event_id}
+        used_titles = {
+            (t.event_title or "").strip().lower()
+            for t in state.turns if t.event_title
+        }
         pool = filter_events(
             corpus,
             length_mode=state.length_mode(),
             craziness=state.craziness(),
-            severity_floor=state.severity_floor(),
+            severity_floor=None,  # soft preference below, not a hard cut —
+            # the hard L-floor + prereq gates collapsed late-game pools to
+            # ~a dozen events and forced repeats
             industry=industry,
-            exclude_ids=recent_ids,
+            exclude_ids=list(used_ids),
         )
+        pool = [
+            ev for ev in pool
+            if ev.title.strip().lower() not in used_titles
+        ]
         # Prereq gating (chaining.md: "The raid is not random. Someone has
         # to flip first."). An event whose prereq seeds haven't been planted
         # by actual play must not be nudged into the Oracle's hands — that's
@@ -400,11 +476,32 @@ def _candidate_shortlist(state: RunState, *, size: int = 16) -> str:
                 pool = [ev for ev in pool if (ev.severity or "S") != "XL"]
         if not pool:
             return "(no shortlist — select from the full corpus above)"
-        # Stable per-(run, turn) seed: same run+turn reproduces, different runs
-        # diverge. random.Random accepts a string seed directly.
+        # Affinity scoring: the onboarding choices must actually shape the
+        # run. industry_* tags don't exist in the corpus, so industry maps
+        # through event categories/tags; founder_vibe maps through tags.
+        floor_rank = {"S": 1, "M": 2, "L": 3, "XL": 4}.get(
+            state.severity_floor() or "S", 1)
+        ind_cats, ind_tags = _INDUSTRY_AFFINITY.get(industry, (set(), set()))
+        vibe_tags = _VIBE_AFFINITY.get(vibe, set())
+
+        def _score(ev) -> float:
+            sc = 1.0
+            tags = set(ev.tags or [])
+            if ev.category in ind_cats or tags & ind_tags:
+                sc += 0.5
+            if tags & vibe_tags:
+                sc += 0.5
+            # soft severity-ramp preference (was a hard cut)
+            if floor_rank >= 3 and {"S": 1, "M": 2, "L": 3, "XL": 4}.get(
+                    ev.severity or "S", 1) >= floor_rank:
+                sc += 0.5
+            return sc
+
+        # Deterministic weighted sample without replacement.
         rng = random.Random(f"{state.run_id}:{state.turn}")
-        rng.shuffle(pool)
-        shortlist = pool[:size]
+        weighted = sorted(
+            pool, key=lambda ev: -(_score(ev) * rng.random()))
+        shortlist = weighted[:size]
         # Include each candidate's full record text (capped) — the cached
         # corpus block truncates its events tail, so this uncached section
         # is the only guaranteed-complete copy of these candidates.
@@ -413,6 +510,15 @@ def _candidate_shortlist(state: RunState, *, size: int = 16) -> str:
             body = (ev.raw_markdown or "").strip()
             if len(body) > 900:
                 body = body[:900] + " […]"
+            if ev.effects:
+                fx = ", ".join(
+                    f"{k.replace('_pct', '')}: {v}{'%' if k.endswith('_pct') else ''}"
+                    for k, v in ev.effects.items()
+                )
+                body += (
+                    f"\nAUTHORED EFFECTS (anchor — your stats_deltas MUST "
+                    f"match these in sign and rough magnitude): {{{fx}}}"
+                )
             blocks.append(body)
         return "\n\n".join(blocks)
     except Exception as exc:  # noqa: BLE001 — never let shortlisting break a turn

@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "build": {
+    "env": {
+      "NEXT_PUBLIC_API_MODE": "prod",
+      "NEXT_PUBLIC_API_URL": "https://slop--agent-ceo-sim-fastapi-app.modal.run"
+    }
+  }
+}

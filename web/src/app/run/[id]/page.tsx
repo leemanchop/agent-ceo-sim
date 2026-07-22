@@ -7,11 +7,11 @@ import { Dashboard } from "@/components/run/dashboard";
 import { Timeline } from "@/components/run/timeline";
 import { AgentStream } from "@/components/run/agent-stream";
 import { LiveFeed } from "@/components/run/live-feed";
+import { FbiUnlockModal, FBI_UNLOCK_AT } from "@/components/run/fbi-file";
 import { Controls } from "@/components/run/controls";
 import { NotificationStack } from "@/components/run/notification-stack";
 import { useNotificationQueue } from "@/lib/use-notification-queue";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { UserMenu } from "@/components/system/user-menu";
 import { useRun } from "@/lib/api/use-run";
 import { getApiMode } from "@/lib/api/client";
 import { useAchievementQueue } from "@/lib/use-achievement-queue";
@@ -22,8 +22,9 @@ export default function RunPage() {
   const search = useSearchParams();
   const runId = (params?.id ?? "demo").toString();
   const replayMode = search.get("replay") === "1";
-  const queriedMode = (search.get("mode") as Mode) ?? "spectate";
-  const mode: Mode = replayMode ? "spectate" : queriedMode;
+  // Be-the-CEO mode retired (owner call, Phase 2): the scripted engine is
+  // spectate-only and coherence-first. Old ?mode=ceo links force-spectate.
+  const mode: Mode = "spectate";
 
   // ── achievement toast queue (real SSE-driven; was previously mocked) ──
   const achievementQueue = useAchievementQueue();
@@ -63,6 +64,7 @@ export default function RunPage() {
     setSpeed,
     setPaused,
     jumpToEvent,
+    backendRunId,
   } = run;
 
   const onReasoningDone = useCallback(() => {
@@ -210,6 +212,26 @@ export default function RunPage() {
     });
   }, [committed, event?.id, event, safePush]);
 
+  // FBI tab unlock: latch at awareness >= FBI_UNLOCK_AT; first crossing
+  // throws the center-screen case-file modal (must be ✕'d — owner spec).
+  const [fbiUnlocked, setFbiUnlocked] = useState(false);
+  const [showFbiModal, setShowFbiModal] = useState(false);
+  useEffect(() => {
+    if (fbiUnlocked) return;
+    if ((stats?.fbi_awareness ?? 0) >= FBI_UNLOCK_AT) {
+      setFbiUnlocked(true);
+      const seenKey = `aces:run:${runId}:fbi-modal-seen`;
+      let seen = false;
+      try {
+        seen = localStorage.getItem(seenKey) === "1";
+        if (!seen) localStorage.setItem(seenKey, "1");
+      } catch {
+        /* localStorage optional */
+      }
+      if (!seen) setShowFbiModal(true);
+    }
+  }, [stats, fbiUnlocked, runId]);
+
   // periodic calendar invites (mock-only — atmospheric loop, backend doesn't emit these)
   useEffect(() => {
     if (getApiMode() !== "mock") return;
@@ -252,27 +274,28 @@ export default function RunPage() {
         </Link>
         <span className="text-soft" style={{ fontSize: 10 }}>/</span>
         <span
-          className="font-mono uppercase tracking-wider"
+          className="font-mono uppercase tracking-wider whitespace-nowrap"
           style={{ fontSize: 11, fontWeight: 700 }}
         >
           {bible.display_name.toUpperCase()}
         </span>
         <span className="text-soft" style={{ fontSize: 10 }}>·</span>
-        <span className="font-body italic text-soft" style={{ fontSize: 11 }}>
+        <span
+          className="font-body italic text-soft truncate min-w-0 flex-1"
+          style={{ fontSize: 11 }}
+          title={bible.one_liner}
+        >
           &quot;{bible.one_liner}&quot;
         </span>
-        <span className="ml-auto flex items-center gap-2">
+        <span className="ml-auto flex items-center gap-2 shrink-0 whitespace-nowrap">
           {replayMode ? (
             <span className="pill alarm solid" style={{ fontSize: 10 }}>
               ▶ REPLAY
             </span>
           ) : (
             <>
-              <span
-                className={`pill ${mode === "ceo" ? "alarm solid" : "solid"}`}
-                style={{ fontSize: 10 }}
-              >
-                {mode === "spectate" ? "SPECTATE" : "YOU · CEO"}
+              <span className="pill solid" style={{ fontSize: 10 }}>
+                SPECTATE
               </span>
               <span className="pill alarm" style={{ fontSize: 10 }}>
                 ● LIVE
@@ -286,19 +309,6 @@ export default function RunPage() {
           <span className="pill" style={{ fontSize: 10 }}>
             RUN #{runId.padStart(5, "0").slice(0, 5)}
           </span>
-          <Link
-            href="/admin/usage"
-            className="font-mono uppercase tracking-wider hover:text-alarm"
-            style={{
-              fontSize: 10,
-              color: "var(--soft)",
-              textDecoration: "none",
-              letterSpacing: "0.08em",
-            }}
-          >
-            → usage
-          </Link>
-          <UserMenu />
         </span>
       </div>
 
@@ -379,7 +389,13 @@ export default function RunPage() {
           className="border-l border-ink min-h-0 overflow-hidden"
           style={{ borderLeftWidth: "1.4px" }}
         >
-          <LiveFeed entries={feed} speed={speed} />
+          <LiveFeed
+            entries={feed}
+            speed={speed}
+            fbiUnlocked={fbiUnlocked}
+            stats={stats}
+            timeline={timeline}
+          />
         </div>
       </div>
 
@@ -412,7 +428,13 @@ export default function RunPage() {
             />
           </TabsContent>
           <TabsContent value="feed" className="flex-1 min-h-0 m-0 mt-2">
-            <LiveFeed entries={feed} speed={speed} />
+            <LiveFeed
+            entries={feed}
+            speed={speed}
+            fbiUnlocked={fbiUnlocked}
+            stats={stats}
+            timeline={timeline}
+          />
           </TabsContent>
           <TabsContent value="timeline" className="flex-1 min-h-0 m-0 mt-2">
             <Timeline entries={timeline} />
@@ -422,13 +444,13 @@ export default function RunPage() {
 
       {runEnded && (
         <RunEndedModal
-          runId={runId}
+          runId={backendRunId ?? runId}
           companyName={bible.display_name}
         />
       )}
       {runEnded ? (
         <EndOfRunStrip
-          runId={runId}
+          runId={backendRunId ?? runId}
           tagline={archive?.tagline ?? "the run is over."}
           endgame={archive?.endgame_id ?? "END · DEMO-001"}
         />
@@ -453,6 +475,12 @@ export default function RunPage() {
           originalPredictionId={originalPredictions[eventIdx] ?? null}
         />
       ) : null}
+
+      <FbiUnlockModal
+        open={showFbiModal}
+        onClose={() => setShowFbiModal(false)}
+        companyName={bible.display_name || bible.name || "the company"}
+      />
 
       {/* Top-right notification stack — distinct from achievement toasts (bottom-right) */}
       <NotificationStack

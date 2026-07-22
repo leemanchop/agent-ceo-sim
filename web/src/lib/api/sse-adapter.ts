@@ -252,7 +252,7 @@ export function miniFromTurnMini(
     tone: v > 0 ? "bad" : v < 0 ? "good" : "neutral",
   }));
   return {
-    id: `mini-${p.kind}-${Date.now()}`,
+    id: p.mini_id ?? `mini-${p.kind}-${Date.now()}`,
     size: "small",
     category: normalizeCategory(p.category),
     timeframe: (p.timeframe as TimeFrame) ?? "short",
@@ -278,6 +278,8 @@ export type RunStreamHandlers = {
   ) => void;
   onFeedItem: (item: FeedEntry) => void;
   onMiniAction: (mini: MiniAction) => void;
+  /** Days-axis pacing: a quiet day ticking past between beats. */
+  onDayTick?: (day: number) => void;
   onFinding: (finding: {
     id: string;
     headline: string;
@@ -432,6 +434,7 @@ export function attachStream(
   on("feed.slack_leak", (p) => handlers.onFeedItem(feedFromSlackLeak(p)));
   on("feed.glassdoor", (p) => handlers.onFeedItem(feedFromGlassdoor(p)));
   on("turn.mini", (p) => handlers.onMiniAction(miniFromTurnMini(p)));
+  on("day.tick", (p) => handlers.onDayTick?.(p.day));
   on("finding.unsealed", (p) =>
     handlers.onFinding({
       id: p.finding_id,

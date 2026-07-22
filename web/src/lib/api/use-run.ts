@@ -53,6 +53,13 @@ import {
 } from "./client";
 import { attachStream, type RunStreamHandlers } from "./sse-adapter";
 
+// React 18 dev StrictMode double-invokes the bootstrap effect: the first
+// invocation's createRun POST is already in flight when its cleanup runs,
+// so two backend runs got created and the surviving UI sometimes followed
+// the dead one (empty live log, orphaned "initialized" runs). Share one
+// in-flight create per slug so both invocations converge on the same run.
+const _inflightCreates = new Map<string, Promise<{ run_id: string }>>();
+
 const MINI_DELAY_BASE = 2500;
 const TIMEFRAME_MUL: Record<MiniAction["timeframe"], number> = {
   short: 0.5,
@@ -180,6 +187,9 @@ const TEMPLATE_BIBLE_SEEDS: Record<string, Partial<CompanyBible>> = {
 };
 
 export type UseRunResult = {
+  /** Backend ULID for this run (null until created). Prefer for links —
+      the backend doesn't know URL slugs. */
+  backendRunId: string | null;
   bible: CompanyBible;
   stats: Stats;
   deltas: StatDeltas;
@@ -334,6 +344,7 @@ export function useRun({
   // can be a template id like "theranos"). Set during bootstrap; read by
   // decide/setSpeed/end calls that hit `/run/{id}/...`.
   const backendRunIdRef = useRef<string | null>(null);
+  const [backendRunId, setBackendRunId] = useState<string | null>(null);
 
   // Live-stream achievements (real backend triggers — no longer mocked).
   const [achievementsUnlocked, setAchievementsUnlocked] = useState<
@@ -634,28 +645,37 @@ export function useRun({
           }));
         }
 
-        const created = await createRun({
-          mode: isTemplate ? "template" : "uploaded",
-          template_id: isTemplate ? runId : null,
-          company: isTemplate
-            ? null
-            : {
-                name: userInput.name || runId,
-                one_liner: userInput.one_liner || "",
-                industry: userInput.industry || "other",
-                founder_vibe: userInput.founder_vibe || undefined,
-                founder: userInput.founder || undefined,
-                founder_handle: userInput.founder_handle || undefined,
-              },
-          settings: {
-            length_mode: (userInput.length as "micro" | "short" | "medium" | "long") || "medium",
-            craziness: (userInput.craziness as "tame" | "normal" | "unhinged") || "normal",
-            interactive: mode === "ceo",
-          },
-        });
+        let createP = _inflightCreates.get(runId);
+        if (!createP) {
+          createP = createRun({
+            mode: isTemplate ? "template" : "uploaded",
+            template_id: isTemplate ? runId : null,
+            company: isTemplate
+              ? null
+              : {
+                  name: userInput.name || runId,
+                  one_liner: userInput.one_liner || "",
+                  industry: userInput.industry || "other",
+                  founder_vibe: userInput.founder_vibe || undefined,
+                  founder: userInput.founder || undefined,
+                  founder_handle: userInput.founder_handle || undefined,
+                },
+            settings: {
+              length_mode: (userInput.length as "micro" | "short" | "medium" | "long") || "medium",
+              craziness: (userInput.craziness as "tame" | "normal" | "unhinged") || "normal",
+              interactive: mode === "ceo",
+            },
+          });
+          _inflightCreates.set(runId, createP);
+          // Expire after the bootstrap window so a deliberate re-visit
+          // starts a FRESH run instead of resuming this one.
+          setTimeout(() => _inflightCreates.delete(runId), 10_000);
+        }
+        const created = await createP;
         if (cancelled) return;
         const ulid = created.run_id;
         backendRunIdRef.current = ulid;
+        setBackendRunId(ulid);
 
         // Open /start to consume researcher events. When stream.open fires,
         // close it and switch to /stream.
@@ -800,33 +820,43 @@ export function useRun({
               : cur
           );
           // Drop a row onto the timeline now that the event resolved.
-          setLiveEvent((curEv) => {
-            if (!curEv) return curEv;
-            const choice = curEv.choices.find((c) => c.id === curEv.agent_choice_id);
-            setTimeline((prev) => {
-              const turnNum = prev.length + 1;
-              const dayNum = (prev[prev.length - 1]?.day ?? 0) + 14;
-              return [
-                ...prev,
-                {
-                  id: `t-${curEv.id}-${turnNum}`,
-                  turn: turnNum,
-                  day: dayNum,
-                  size: "large",
-                  category: curEv.category,
-                  severity: curEv.severity,
-                  title: curEv.title,
-                  outcome:
-                    (choice?.label ?? "—") + ". " + curEv.justification,
-                  alarm:
-                    curEv.severity === "XL" ||
-                    curEv.category === "REGULATORY" ||
-                    curEv.category === "FBI",
-                },
-              ];
-            });
-            return curEv;
-          });
+          // Read via ref — calling setTimeline inside a setLiveEvent updater
+          // made the updater impure, and React (dev StrictMode) re-runs
+          // impure updaters, which duplicated every timeline row (UX-8).
+          {
+            const curEv = liveEventRef.current;
+            if (curEv) {
+              const choice = curEv.choices.find(
+                (c) => c.id === curEv.agent_choice_id
+              );
+              setTimeline((prev) => {
+                // Idempotent: SSE replays / double-invokes must not dupe.
+                if (prev.some((r) => r.id.startsWith(`t-${curEv.id}-`))) {
+                  return prev;
+                }
+                const turnNum = prev.length + 1;
+                const dayNum = (prev[prev.length - 1]?.day ?? 0) + 14;
+                return [
+                  ...prev,
+                  {
+                    id: `t-${curEv.id}-${turnNum}`,
+                    turn: turnNum,
+                    day: dayNum,
+                    size: "large" as const,
+                    category: curEv.category,
+                    severity: curEv.severity,
+                    title: curEv.title,
+                    outcome:
+                      (choice?.label ?? "—") + ". " + curEv.justification,
+                    alarm:
+                      curEv.severity === "XL" ||
+                      curEv.category === "REGULATORY" ||
+                      curEv.category === "FBI",
+                  },
+                ];
+              });
+            }
+          }
           setPhase("consequences");
           // After ~4s the consequences animation has finished AND the user
           // has had time to see the reveal callout + agent pick. Then flip
@@ -840,8 +870,20 @@ export function useRun({
         onFeedItem: (item) => {
           setFeed((prev) => [item, ...prev].slice(0, 200));
         },
+        onDayTick: (day) => {
+          // Days-axis: the script's calendar ticking through a quiet
+          // stretch. Update the dashboard day and settle the stage into
+          // ambient so the finished event card visibly recedes.
+          setStats((cur) => ({ ...cur, day }));
+          setPhase((p) =>
+            p === "advancing" || p === "consequences" ? "ambient" : p
+          );
+        },
         onMiniAction: (mini) => {
           setTimeline((prev) => {
+            if (prev.some((r) => r.id.startsWith(`tm-${mini.id}-`))) {
+              return prev;  // idempotent (UX-8)
+            }
             const turnNum = prev.length + 1;
             const dayNum = (prev[prev.length - 1]?.day ?? 0) + 2;
             return [
@@ -925,6 +967,10 @@ export function useRun({
         },
         onResearchProgress: (step, current, total) => {
           setResearchProgress({ step, current, total });
+          setResearchLog((prev) => {
+            const next = [...prev, { step, current, total, ts: Date.now() }];
+            return next.length > 50 ? next.slice(-50) : next;
+          });
         },
         onStreamReady: () => {
           // researcher done; main loop is about to start firing events.
@@ -1087,6 +1133,7 @@ export function useRun({
   return {
     bible,
     stats,
+    backendRunId,
     deltas,
     timeline,
     feed,

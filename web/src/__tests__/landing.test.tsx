@@ -37,10 +37,10 @@ describe("Landing page", () => {
     expect(btn).toBeTruthy();
   });
 
-  it("renders both mode toggles (Spectate / Be the CEO)", () => {
+  it("does NOT render the retired Be-the-CEO mode toggle (spectate-only)", () => {
     render(<LandingPage />);
-    expect(screen.getByText(/spectate/i)).toBeTruthy();
-    expect(screen.getByText(/be the ceo/i)).toBeTruthy();
+    expect(screen.queryByText(/be the ceo/i)).toBeNull();
+    expect(screen.queryByText(/who decides/i)).toBeNull();
   });
 
   it("renders all three length options", () => {

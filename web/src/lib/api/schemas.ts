@@ -66,6 +66,7 @@ export const EffectChipSchema = z.object({
   label: z.string(),
   value: z.string(),
   tone: z.enum(["good", "bad", "neutral"]),
+  why: z.string().nullable().optional(),
 });
 
 // ── per-event-kind SSE payloads ────────────────────────────────
@@ -172,7 +173,13 @@ export const FeedGlassdoorSchema = z.object({
   ts: z.string(),
 });
 
+export const DayTickSchema = z.object({
+  day: z.number(),
+  quiet: z.boolean().nullable().optional(),
+});
+
 export const TurnMiniSchema = z.object({
+  mini_id: z.string().nullable().optional(),
   kind: z.string(),
   headline: z.string(),
   stat_deltas: z.record(z.number()).default({}),
@@ -261,6 +268,7 @@ export const SSE_EVENT_SCHEMAS: Record<string, z.ZodTypeAny> = {
   "feed.slack_leak": FeedSlackLeakSchema,
   "feed.glassdoor": FeedGlassdoorSchema,
   "turn.mini": TurnMiniSchema,
+  "day.tick": DayTickSchema,
   "finding.unsealed": FindingUnsealedSchema,
   "endgame.reached": EndgameReachedSchema,
   "system.error": SystemErrorSchema,

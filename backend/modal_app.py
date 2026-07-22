@@ -114,23 +114,38 @@ def _build_fastapi():
             ach_status = achievement_engine.engine_status()
         except Exception:
             pass
-        return {"ok": True, "achievement_engine": ach_status}
+        # Scripted-engine availability — surfaces the guarded-import failure
+        # mode (routes falls back to the live engine silently otherwise).
+        scripted: Dict[str, Any] = {"available": False}
+        try:
+            import showrunner  # type: ignore
+            import playback  # type: ignore
+            scripted = {"available": True}
+        except Exception as e:
+            scripted = {"available": False, "error": f"{type(e).__name__}: {e}"}
+        return {"ok": True, "achievement_engine": ach_status,
+                "scripted_engine": scripted}
 
-    # TODO: gate behind admin auth before public launch.
+    def _admin(token: str) -> None:
+        expected = os.environ.get("ACES_ADMIN_TOKEN", "")
+        if expected and token != expected:
+            raise HTTPException(403, "admin token required")
+
     @fapi.get("/usage")
-    def usage_all():
+    def usage_all(token: str = ""):
+        _admin(token)
         return usage_tracker.summarize(None)
 
-    # TODO: gate behind admin auth before public launch.
     @fapi.get("/usage/{run_id}")
-    def usage_one(run_id: str):
+    def usage_one(run_id: str, token: str = ""):
+        _admin(token)
         if not run_id:
             raise HTTPException(400, "run_id required")
         return usage_tracker.summarize(run_id)
 
-    # TODO: gate behind admin auth before public launch.
     @fapi.get("/rate_limits")
-    def rate_limits():
+    def rate_limits(token: str = ""):
+        _admin(token)
         return usage_tracker.current_rate_limits()
 
     # Mount per-run SSE + REST routes (POST /run/create, GET /run/{id}/stream, …).
@@ -140,7 +155,11 @@ def _build_fastapi():
 
 
 @app.function(
-    secrets=[modal.Secret.from_name("anthropic")],
+    secrets=[
+        modal.Secret.from_name("anthropic"),
+        # Optional admin token (ACES_ADMIN_TOKEN) gating /usage + /admin/*.
+        modal.Secret.from_name("admin"),
+    ],
     timeout=60 * 60,  # 1 hour for long runs
     volumes={"/data": runs_volume},  # persistent run-state SQLite
     # Pin to a single container so the in-memory _RUNS cache + decision
@@ -149,7 +168,10 @@ def _build_fastapi():
     # immediately after POST /run/create on a different replica. For the
     # hackathon's traffic this is fine — multi-replica scale-out comes later
     # via a real backing store (Postgres + Redis pubsub).
-    min_containers=1,
+    # min_containers=0: spin down when idle (solo-dev / free-tier friendly —
+    # a pinned warm container eats ~$15-30/mo of credits). Cold start ~5s.
+    # max_containers=1 stays: in-memory run state requires a single replica.
+    min_containers=0,
     max_containers=1,
 )
 # Each ASGI container handles many concurrent SSE connections. Bump the

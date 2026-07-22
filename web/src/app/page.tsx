@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { UserMenu } from "@/components/system/user-menu";
 import { markGuest } from "@/lib/user/local-runs";
 
 const INDUSTRIES = ["SaaS", "AI", "Fintech", "Bio", "Crypto", "DTC", "Other"];
@@ -48,7 +47,6 @@ export default function LandingPage() {
   const [vibe, setVibe] = useState<string>("Stanford Dropout");
   const [length, setLength] = useState<(typeof LENGTHS)[number]>("medium");
   const [crazy, setCrazy] = useState<(typeof CRAZINESS)[number]>("normal");
-  const [mode, setMode] = useState<"spectate" | "ceo">("spectate");
   const [showMoreTemplates, setShowMoreTemplates] = useState(false);
 
   // ?guest=1 → record the spectator opt-in so the UserMenu shows GUEST.
@@ -58,7 +56,7 @@ export default function LandingPage() {
 
   function buildSearch() {
     const p = new URLSearchParams();
-    p.set("mode", mode);
+    p.set("mode", "spectate");
     p.set("length", length);
     p.set("craziness", crazy);
     if (industry) p.set("industry", industry);
@@ -85,7 +83,7 @@ export default function LandingPage() {
           founder_handle: founderHandle.trim(),
           length,
           craziness: crazy,
-          mode,
+          mode: "spectate",
           saved_at: new Date().toISOString(),
         };
         localStorage.setItem(
@@ -101,7 +99,7 @@ export default function LandingPage() {
 
   function startTemplate(id: string) {
     const p = new URLSearchParams();
-    p.set("mode", mode);
+    p.set("mode", "spectate");
     p.set("length", length);
     p.set("craziness", crazy);
     p.set("template", id);
@@ -121,12 +119,7 @@ export default function LandingPage() {
         >
           FORBES · 30u30 SIMULATOR
         </div>
-        <nav className="flex items-center gap-2">
-          <a href="/about" className="pill" style={{ cursor: "pointer" }}>about</a>
-          <a href="/archive" className="pill" style={{ cursor: "pointer" }}>archive</a>
-          <a href="/me/runs" className="pill" style={{ cursor: "pointer" }}>my runs</a>
-          <UserMenu />
-        </nav>
+        {/* nav pills removed (owner call) — pages remain reachable by URL */}
       </header>
 
       <div className="max-w-3xl mx-auto px-6 py-12">
@@ -177,25 +170,6 @@ export default function LandingPage() {
             30 sec to start ↴
           </div>
 
-          {/* mode toggle */}
-          <Field label="Who decides?">
-            <div className="flex gap-2">
-              <ModeChip
-                active={mode === "spectate"}
-                onClick={() => setMode("spectate")}
-                title="Spectate"
-                subtitle="Watch the agent decide. Predict."
-              />
-              <ModeChip
-                active={mode === "ceo"}
-                onClick={() => setMode("ceo")}
-                title="Be the CEO"
-                subtitle="You pick. Agent shows what it would have done."
-                alarm
-              />
-            </div>
-          </Field>
-
           {/* name */}
           <Field label="Company name">
             <input
@@ -217,7 +191,7 @@ export default function LandingPage() {
           </Field>
 
           {/* founder (optional — treated as ground truth by the researcher) */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-3 items-start mt-4 [&>label]:mt-0">
             <Field label="Founder name (optional)">
               <input
                 value={founder}
@@ -427,48 +401,3 @@ function ChipPick({
   );
 }
 
-function ModeChip({
-  active,
-  onClick,
-  title,
-  subtitle,
-  alarm,
-}: {
-  active: boolean;
-  onClick: () => void;
-  title: string;
-  subtitle: string;
-  alarm?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="text-left transition-colors flex-1"
-      style={{
-        border: active
-          ? alarm
-            ? "1.4px solid var(--alarm)"
-            : "1.4px solid var(--ink)"
-          : "1.4px solid var(--ink)",
-        background: active ? (alarm ? "var(--alarm-soft)" : "var(--ink)") : "transparent",
-        color: active ? (alarm ? "var(--alarm)" : "var(--paper)") : "var(--ink)",
-        padding: "8px 10px",
-        cursor: "pointer",
-      }}
-    >
-      <div
-        className="font-mono uppercase tracking-wider"
-        style={{ fontSize: 12, fontWeight: 700 }}
-      >
-        {title}
-      </div>
-      <div
-        className="font-body mt-0.5"
-        style={{ fontSize: 11, opacity: 0.85 }}
-      >
-        {subtitle}
-      </div>
-    </button>
-  );
-}

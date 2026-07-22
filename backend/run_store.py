@@ -118,6 +118,19 @@ CREATE TABLE IF NOT EXISTS run_decisions (
 );
 CREATE INDEX IF NOT EXISTS idx_decisions_run_id ON run_decisions(run_id);
 
+CREATE TABLE IF NOT EXISTS submissions (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts            TEXT NOT NULL,
+  run_id        TEXT NOT NULL UNIQUE,
+  mode          TEXT,
+  company_name  TEXT,
+  one_liner     TEXT,
+  industry      TEXT,
+  founder_vibe  TEXT,
+  founder       TEXT,
+  founder_handle TEXT
+);
+
 CREATE TABLE IF NOT EXISTS run_achievements (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   run_id TEXT NOT NULL,
@@ -139,7 +152,97 @@ def init_db() -> None:
             conn.commit()
         finally:
             conn.close()
+    _backfill_submissions()
     log.info("run_store: initialized DB at %s", SQLITE_PATH)
+
+
+def _backfill_submissions() -> None:
+    """One-time-ish: seed the submissions table from runs that predate it
+    (their company_input lives in the state blob). INSERT OR IGNORE keyed
+    on run_id makes this idempotent across every container boot."""
+    try:
+        with _DB_LOCK:
+            conn = _connect()
+            try:
+                rows = conn.execute(
+                    "SELECT run_id, mode, started_at, state_blob_json FROM runs "
+                    "WHERE run_id NOT IN (SELECT run_id FROM submissions)"
+                ).fetchall()
+                for run_id, mode, started_at, blob_json in rows:
+                    try:
+                        blob = json.loads(blob_json or "{}")
+                    except Exception:
+                        blob = {}
+                    ci = blob.get("company_input") or {}
+                    conn.execute(
+                        "INSERT OR IGNORE INTO submissions "
+                        "(ts, run_id, mode, company_name, one_liner, industry, "
+                        " founder_vibe, founder, founder_handle) "
+                        "VALUES (?,?,?,?,?,?,?,?,?)",
+                        (
+                            started_at or datetime.now(tz=timezone.utc).isoformat(),
+                            run_id, mode or "",
+                            str(ci.get("name") or ""),
+                            str(ci.get("one_liner") or ""),
+                            str(ci.get("industry") or ""),
+                            str(ci.get("founder_vibe") or ""),
+                            str(ci.get("founder") or ""),
+                            str(ci.get("founder_handle") or ""),
+                        ),
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+    except Exception:  # pragma: no cover
+        log.exception("submissions backfill failed")
+
+
+def record_submission(run_id: str, company_input, mode: str) -> None:
+    """Owner-facing lead capture: every company/founder/handle a player
+    submits, one row per run. Best-effort — never blocks run creation."""
+    ci = company_input if isinstance(company_input, dict) else {}
+    try:
+        with _DB_LOCK:
+            conn = _connect()
+            try:
+                conn.execute(
+                    "INSERT OR IGNORE INTO submissions "
+                    "(ts, run_id, mode, company_name, one_liner, industry, "
+                    " founder_vibe, founder, founder_handle) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
+                    (
+                        datetime.now(tz=timezone.utc).isoformat(),
+                        run_id, mode,
+                        str(ci.get("name") or ""),
+                        str(ci.get("one_liner") or ""),
+                        str(ci.get("industry") or ""),
+                        str(ci.get("founder_vibe") or ""),
+                        str(ci.get("founder") or ""),
+                        str(ci.get("founder_handle") or ""),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+    except Exception:  # pragma: no cover — analytics must never break play
+        log.exception("record_submission failed")
+
+
+def list_submissions(limit: int = 5000):
+    """All submissions, newest first, as plain dicts."""
+    with _DB_LOCK:
+        conn = _connect()
+        try:
+            rows = conn.execute(
+                "SELECT ts, run_id, mode, company_name, one_liner, industry, "
+                "founder_vibe, founder, founder_handle FROM submissions "
+                "ORDER BY id DESC LIMIT ?", (int(limit),),
+            ).fetchall()
+        finally:
+            conn.close()
+    cols = ("ts", "run_id", "mode", "company_name", "one_liner", "industry",
+            "founder_vibe", "founder", "founder_handle")
+    return [dict(zip(cols, r)) for r in rows]
 
 
 # ---- (de)serialization ---------------------------------------------------
@@ -252,6 +355,10 @@ def _blob_to_state(
         pending_event_id=blob.get("pending_event_id"),
         last_user_decision=blob.get("last_user_decision"),
         cancelled=bool(blob.get("cancelled", False)),
+        script=blob.get("script"),
+        script_cursor=int(blob.get("script_cursor") or 0),
+        endgame_id=blob.get("endgame_id") or "",
+        post_mortem_md=blob.get("post_mortem_md") or "",
     )
     # decision_queue is rebound lazily inside the streaming loop's event loop.
     return state
