@@ -43,6 +43,9 @@ from typing import Any, AsyncGenerator, Callable, Dict, List
 
 # Sleep between agent.thought_token chunks (scaled by playback speed).
 TOKEN_SLEEP = 0.02
+# Read pause after a decision resolves (reveal + verdict + stat ripples on
+# screen) before the calendar starts ticking again. Scaled by speed.
+READ_PAUSE = 6.0
 # Sleep between agent.deliberation_token chunks (scaled by playback speed).
 DELIB_SLEEP = 0.015
 # Spectate-mode prediction window after choices.appear (force_choice is N/A
@@ -433,6 +436,17 @@ async def stream_script(
         for ach_evt in emit_achievements(state):
             yield ach_evt
 
+        # ---- read pause: let the reveal breathe (owner spec) ------------
+        pause = READ_PAUSE * factor
+        while pause > 0:
+            if getattr(state, "cancelled", False):
+                return
+            step = min(2.0, pause)
+            await asyncio.sleep(step)
+            pause -= step
+            if pause > 0:
+                yield ": ping\n\n"
+
         # Inter-beat breath, same knob as the live loop.
         await asyncio.sleep(float(gap_for_speed(state.speed)))
 
@@ -574,6 +588,7 @@ if __name__ == "__main__":
 
     # Instant pacing for the test.
     TOKEN_SLEEP = 0.0
+    READ_PAUSE = 0.0
     DELIB_SLEEP = 0.0
     PREDICTION_WINDOW_SECONDS = 0.25
     PAUSE_POLL_SECONDS = 0.01
