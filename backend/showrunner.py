@@ -462,6 +462,19 @@ def _new_beat(kind: str, turn: int, episode: int) -> Dict[str, Any]:
 _PICK_TONE_CYCLE = ["unhinged", "based", "unhinged", "based", "unhinged", "midwit"]
 
 
+
+def _shuffle_choice_tones(choices: List[Dict[str, str]], rng: "random.Random") -> List[Dict[str, str]]:
+    """Decorrelate tone from button position (UX-17: players learned
+    'crazy is always the middle option' in three turns). Shuffle the
+    tone+label bundles, then relabel ids A/B/C in display order so the
+    pick director (which selects by TONE) stays untouched."""
+    bundles = [dict(c) for c in choices]
+    rng.shuffle(bundles)
+    for i, c in enumerate(bundles):
+        c["id"] = chr(65 + i)
+    return bundles
+
+
 def _next_pick_tone(beat: Dict[str, Any], rng: "random.Random") -> str:
     tones = {c.get("tone") for c in (beat.get("choices") or []) if c.get("tone")}
     turn = int(beat.get("turn") or 1)
@@ -519,6 +532,9 @@ def build_skeleton(state: RunState, corpus: WorldCorpus) -> Dict[str, Any]:
                 pool.append(ev)
                 spice_ids.add(ev.record_id)
     mini_lo, mini_hi = _MINI_BUDGET.get(mode, (1, 2))
+    # Crazier bands start pre-noticed — folded into beat 1's deltas so the
+    # trajectory law (initial_stats + deltas chain) stays intact.
+    _aw_floor = {"tame": 0, "normal": 2, "crazy": 6, "unhinged": 10}.get(craziness, 0)
 
     used: Set[str] = set()
     planted: Set[str] = set()
@@ -535,6 +551,25 @@ def build_skeleton(state: RunState, corpus: WorldCorpus) -> Dict[str, Any]:
 
     def commit(beat: Dict[str, Any], deltas: Dict[str, int]) -> None:
         """Apply the trajectory law: stats_after = running ⊕ deltas."""
+        # The Bureau notices what the fraud meter measures (UX-18: short
+        # runs sat at fbi_awareness 0 forever — awareness had no income
+        # stream outside prereq-gated federal events).
+        fraud_up = int(deltas.get("fraud_score") or 0)
+        if fraud_up > 0:
+            deltas["fbi_awareness"] = int(deltas.get("fbi_awareness") or 0) \
+                + max(1, int(fraud_up * 0.6))
+        # ...and accumulated fraud is a standing beacon: from fraud 10 up,
+        # every large beat drips awareness (fraud//10 — 30 -> +3/beat), so
+        # a short run that leans in crosses the FBI unlock (20) in its
+        # back half. Clean runs stay dark.
+        if beat.get("kind") == "large":
+            fraud_stock = int(running.get("fraud_score", 0))
+            # micro compresses the whole arc into 5 turns — heat accrues
+            # proportionally faster so the FBI unlock stays reachable.
+            div = 4 if mode == "micro" else 8
+            if fraud_stock >= div:
+                deltas["fbi_awareness"] = int(deltas.get("fbi_awareness") or 0) \
+                    + max(1, fraud_stock // div)
         deltas = _cap_beat_deltas(
             deltas, running,
             str(beat.get("severity") or "S"), beat.get("tags") or [],
@@ -609,6 +644,10 @@ def build_skeleton(state: RunState, corpus: WorldCorpus) -> Dict[str, Any]:
             if rng.random() < 0.5:
                 deltas["reputation"] = (1 if rng.random() < 0.5 else -1) * rng.randint(1, 3)
         deltas["day"] = day_step
+        nonlocal _aw_floor
+        if _aw_floor:
+            deltas["fbi_awareness"] = int(deltas.get("fbi_awareness") or 0) + _aw_floor
+            _aw_floor = 0
         commit(beat, deltas)
         return beat
 
@@ -664,7 +703,8 @@ def build_skeleton(state: RunState, corpus: WorldCorpus) -> Dict[str, Any]:
             beat["severity"] = severity
             beat["tags"] = list(rec.tags or [])
             beat["_src"] = {"title": rec.title, "body": _record_prose(rec)}
-            beat["choices"] = _extract_choices(rec) or _skeleton_choices()
+            beat["choices"] = _shuffle_choice_tones(
+                _extract_choices(rec) or _skeleton_choices(), rng)
             beat["ceo_pick_tone"] = _next_pick_tone(beat, rng)
             plants = [p for p in (rec.plants or []) if isinstance(p, str)]
             pays = [p for p in _pays_off(rec) if p in planted]
@@ -687,7 +727,7 @@ def build_skeleton(state: RunState, corpus: WorldCorpus) -> Dict[str, Any]:
                 "title": "an unscripted week",
                 "body": "The company has a week nobody planned for. The chorus notices.",
             }
-            beat["choices"] = _skeleton_choices()
+            beat["choices"] = _shuffle_choice_tones(_skeleton_choices(), rng)
             beat["ceo_pick_tone"] = _next_pick_tone(beat, rng)
             deltas = _default_deltas(severity, running, rng, late)
 

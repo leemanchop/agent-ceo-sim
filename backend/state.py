@@ -304,7 +304,19 @@ class RunState:
         return {
             "run_id": self.run_id,
             "status": self.status,
-            "company": self.bible,
+            # Flat company summary — the frontend's RunSnapshot type expects
+            # display_name/founder at this level; the nested research bible
+            # rides alongside for consumers that want depth (UX-16: the
+            # post-mortem page read undefined off the nested shape).
+            "company": (lambda b: (lambda c, f: {
+                "name": c.get("name"),
+                "display_name": c.get("display_name") or c.get("name"),
+                "one_liner": c.get("one_liner"),
+                "industry": c.get("industry"),
+                "founder": (f[0].get("name") if f and isinstance(f[0], dict) else None),
+            })((b.get("company") or {}) if isinstance(b, dict) else {},
+               (b.get("founders") or []) if isinstance(b, dict) else []))(self.bible or {}),
+            "bible": self.bible,
             "settings": self.settings,
             "endgame_id": self.endgame_id or None,
             "endgame": ({

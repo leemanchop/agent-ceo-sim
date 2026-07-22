@@ -291,3 +291,27 @@ Reported by Nathan playing real-LLM runs locally (2026-07-20).
   higher so the gated back-half unlocks; CEO pick-tone cycle leans
   unhinged (6/12 picks) and the prose doctrine adds "THE CEO IS RISK-ON".
 - Status: shipped — tune further after play
+
+## UX-16/17/18 — Post-mortem by ULID; unpredictable picks; FBI reachable everywhere
+
+> "the post mortem still doesn't work... it's kind of obvious what choice
+> the agent is going to make... there shouldddd be a way for the fbi tab
+> to get unlocked even in micro/short mode"
+
+- UX-16 (post-mortem): root disease was slug-routing — every prior fix
+  was a bandage over slug≠ULID. The run page now navigates to
+  /run/{ULID}/post-mortem (backendRunId threaded through the endgame
+  modal/strip), so the page's server fetch hits the real run + persisted
+  long-read directly. Slug links keep the handoff fallback.
+- UX-17 (predictability): choice tones were positional (A=unhinged...)
+  and the pick followed a cycle. Choices now shuffle per beat (ids
+  relabeled in display order) and the pick is weighted dice per beat —
+  normal mode lands the craziest option ~40%. Verified: unhinged tone
+  spread across all three slots; distribution felt, not callable.
+- UX-18 (FBI dead in short runs): awareness had no income stream outside
+  gated federal events. Heat coupling: fraud GAINS leak 0.6x into
+  awareness, and accumulated fraud >= 8 drips fraud//8 per large beat
+  (micro compresses to //4). Verified crossings of the 20-unlock:
+  short/normal 4/8, short/crazy 7/8, micro 2/8 — reachable everywhere,
+  guaranteed nowhere; clean runs stay dark.
+- Status: shipped — pending live re-test

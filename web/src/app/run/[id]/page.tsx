@@ -64,6 +64,7 @@ export default function RunPage() {
     setSpeed,
     setPaused,
     jumpToEvent,
+    backendRunId,
   } = run;
 
   const onReasoningDone = useCallback(() => {
@@ -443,13 +444,13 @@ export default function RunPage() {
 
       {runEnded && (
         <RunEndedModal
-          runId={runId}
+          runId={backendRunId ?? runId}
           companyName={bible.display_name}
         />
       )}
       {runEnded ? (
         <EndOfRunStrip
-          runId={runId}
+          runId={backendRunId ?? runId}
           tagline={archive?.tagline ?? "the run is over."}
           endgame={archive?.endgame_id ?? "END · DEMO-001"}
         />

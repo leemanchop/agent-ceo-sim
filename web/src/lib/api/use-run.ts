@@ -187,6 +187,9 @@ const TEMPLATE_BIBLE_SEEDS: Record<string, Partial<CompanyBible>> = {
 };
 
 export type UseRunResult = {
+  /** Backend ULID for this run (null until created). Prefer for links —
+      the backend doesn't know URL slugs. */
+  backendRunId: string | null;
   bible: CompanyBible;
   stats: Stats;
   deltas: StatDeltas;
@@ -341,6 +344,7 @@ export function useRun({
   // can be a template id like "theranos"). Set during bootstrap; read by
   // decide/setSpeed/end calls that hit `/run/{id}/...`.
   const backendRunIdRef = useRef<string | null>(null);
+  const [backendRunId, setBackendRunId] = useState<string | null>(null);
 
   // Live-stream achievements (real backend triggers — no longer mocked).
   const [achievementsUnlocked, setAchievementsUnlocked] = useState<
@@ -671,6 +675,7 @@ export function useRun({
         if (cancelled) return;
         const ulid = created.run_id;
         backendRunIdRef.current = ulid;
+        setBackendRunId(ulid);
 
         // Open /start to consume researcher events. When stream.open fires,
         // close it and switch to /stream.
@@ -1128,6 +1133,7 @@ export function useRun({
   return {
     bible,
     stats,
+    backendRunId,
     deltas,
     timeline,
     feed,
