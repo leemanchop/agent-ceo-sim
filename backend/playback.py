@@ -258,21 +258,9 @@ async def stream_script(
             "tags": beat.get("tags") or [],
         })
 
-        # ---- c) CEO hidden reasoning, re-streamed token by token ----------
-        thought_id = f"thought_{turn}"
-        reasoning = _as_str(beat.get("ceo_reasoning"))
-        for chunk in _chunk_for_stream(reasoning):
-            yield sse("agent.thought_token", {
-                "token": chunk, "stream_id": thought_id,
-            })
-            if TOKEN_SLEEP * factor > 0:
-                await asyncio.sleep(TOKEN_SLEEP * factor)
-        yield sse("agent.thought_complete", {
-            "stream_id": thought_id,
-            "full_text": reasoning,
-        })
-
-        # ---- d) choices + prediction window --------------------------------
+        # ---- c) choices + prediction window (FIRST — the reasoning used to
+        # stream before the chips and spoiled the pick; the user now commits
+        # blind, then watches the agent think. UX-19.) ------------------
         choices = [c for c in (beat.get("choices") or []) if isinstance(c, dict)]
         window = PREDICTION_WINDOW_SECONDS
         yield sse("choices.appear", {
@@ -308,6 +296,21 @@ async def stream_script(
             # force_choice has no meaning in scripted playback — the script
             # owns the CEO's choice. Ignore politely and keep the window open.
             continue
+
+        # ---- d) CEO hidden reasoning — the REVEAL, streamed after the
+        # user's prediction locks (or the window expires) ---------------
+        thought_id = f"thought_{turn}"
+        reasoning = _as_str(beat.get("ceo_reasoning"))
+        for chunk in _chunk_for_stream(reasoning):
+            yield sse("agent.thought_token", {
+                "token": chunk, "stream_id": thought_id,
+            })
+            if TOKEN_SLEEP * factor > 0:
+                await asyncio.sleep(TOKEN_SLEEP * factor)
+        yield sse("agent.thought_complete", {
+            "stream_id": thought_id,
+            "full_text": reasoning,
+        })
 
         # ---- e) prediction grading ------------------------------------------
         # There is no counter to increment: RunState.snapshot() DERIVES
@@ -710,14 +713,15 @@ if __name__ == "__main__":
 
         expected = [
             "turn.mini",
-            # large turn 1 (user predicted A; tweet + one reaction)
-            "turn.start", "event.materialize", "agent.thought_token",
-            "agent.thought_complete", "choices.appear",
+            # large turn 1 — predict-first order (UX-19): chips before the
+            # agent's reasoning so the pick can't be spoiled
+            "turn.start", "event.materialize", "choices.appear",
+            "agent.thought_token", "agent.thought_complete",
             "agent.deliberation_token", "agent.commit",
             "consequences.applied", "feed.tweet",
             # large turn 2 (no prediction; no tweet, no reactions)
-            "turn.start", "event.materialize", "agent.thought_token",
-            "agent.thought_complete", "choices.appear",
+            "turn.start", "event.materialize", "choices.appear",
+            "agent.thought_token", "agent.thought_complete",
             "agent.deliberation_token", "agent.commit",
             "consequences.applied",
         ]

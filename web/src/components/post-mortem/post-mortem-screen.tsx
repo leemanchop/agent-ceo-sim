@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ShareCard, CARD_HEIGHT, CARD_WIDTH } from "./share-card";
 import type { EndgameSnapshot } from "@/lib/mock-endgame";
-import { UserMenu } from "@/components/system/user-menu";
 
 type Props = {
   endgame: EndgameSnapshot;
@@ -133,8 +132,6 @@ export function PostMortemScreen({ endgame: serverEndgame, runId }: Props) {
     return () => window.removeEventListener("resize", recompute);
   }, []);
 
-  const permalink = `${SHARE_DOMAIN}/run/${runId}`;
-
   const flashToast = useCallback((msg: string) => {
     setToast(msg);
     window.setTimeout(() => setToast(null), 2200);
@@ -170,22 +167,44 @@ export function PostMortemScreen({ endgame: serverEndgame, runId }: Props) {
     }
   }, [endgame.company_name, flashToast]);
 
-  const onTweet = useCallback(() => {
-    const text = `${endgame.tagline} watch the run on @30u30fail`;
-    const url = `https://twitter.com/intent/tweet?text=${encodeURIComponent(
-      text,
-    )}&url=${encodeURIComponent(permalink)}`;
-    window.open(url, "_blank", "noopener,noreferrer");
-  }, [endgame.tagline, permalink]);
-
-  const onCopy = useCallback(async () => {
+  const onTweet = useCallback(async () => {
+    // Owner spec: no run link in the tweet — the trading-card PNG is the
+    // payload. Twitter's web intent can't attach images, so we put the PNG
+    // on the clipboard (fallback: download it) and open a text-only intent.
+    const text = `${endgame.tagline} @30u30fail`;
     try {
-      await navigator.clipboard.writeText(permalink);
-      flashToast("link copied");
+      const lib = await loadHtmlToImage();
+      if (lib && cardRef.current) {
+        const dataUrl = await lib.toPng(cardRef.current, {
+          width: CARD_WIDTH,
+          height: CARD_HEIGHT,
+          pixelRatio: 1,
+          cacheBust: true,
+          backgroundColor: "#15130f",
+        });
+        const blob = await (await fetch(dataUrl)).blob();
+        try {
+          await navigator.clipboard.write([
+            new ClipboardItem({ "image/png": blob }),
+          ]);
+          flashToast("card copied — paste (⌘V) into your tweet");
+        } catch {
+          const a = document.createElement("a");
+          a.href = dataUrl;
+          a.download = `30u30-${slugify(endgame.company_name)}.png`;
+          a.click();
+          flashToast("card downloaded — attach it to your tweet");
+        }
+      }
     } catch {
-      flashToast("copy failed — long-press to select");
+      /* card render failed — tweet still opens */
     }
-  }, [permalink, flashToast]);
+    window.open(
+      `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`,
+      "_blank",
+      "noopener,noreferrer",
+    );
+  }, [endgame.tagline, endgame.company_name, flashToast]);
 
   // visible portion of the long-read body — split on blank lines
   const paragraphs = endgame.post_mortem_long_read
@@ -222,14 +241,13 @@ export function PostMortemScreen({ endgame: serverEndgame, runId }: Props) {
         >
           ← BACK TO RUN
         </Link>
-        <div className="ml-2">
-          <UserMenu />
-        </div>
       </div>
 
       {/* ── HERO: card + CTAs ─────────────────────────────────── */}
-      <div className="grid lg:grid-cols-[1fr_320px] gap-8 px-4 md:px-8 pt-8 pb-10">
-        {/* card stage with paper-2 backdrop */}
+      <div className="grid lg:grid-cols-[minmax(0,1fr)_320px] gap-8 px-4 md:px-8 pt-8 pb-10">
+        {/* card stage with paper-2 backdrop (minmax(0,1fr): grid children
+            default to min-width:auto, so the 1080px card forced the whole
+            row to overflow horizontally) */}
         <div
           ref={stageRef}
           className="bg-paper2 flex items-start justify-center"
@@ -261,7 +279,7 @@ export function PostMortemScreen({ endgame: serverEndgame, runId }: Props) {
         </div>
 
         {/* CTAs column */}
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-3 min-w-0">
           <button
             type="button"
             onClick={onDownload}
@@ -279,25 +297,6 @@ export function PostMortemScreen({ endgame: serverEndgame, runId }: Props) {
           >
             SHARE TWEET
           </button>
-          <button
-            type="button"
-            onClick={onCopy}
-            className="brutalist-btn"
-            style={{ textAlign: "left" }}
-          >
-            COPY LINK
-          </button>
-          <Link
-            href={`/run/${runId}?replay=1`}
-            className="brutalist-btn"
-            style={{
-              textAlign: "left",
-              textDecoration: "none",
-              display: "inline-block",
-            }}
-          >
-            REPLAY THIS RUN
-          </Link>
           <Link
             href="/"
             className="brutalist-btn"
