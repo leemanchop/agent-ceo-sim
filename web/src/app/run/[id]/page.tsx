@@ -231,32 +231,6 @@ export default function RunPage() {
     }
   }, [stats, fbiUnlocked, runId]);
 
-  // valuation moved → pop-up with the one-line why (UX-12)
-  const lastValNotifRef = useRef<string | null>(null);
-  useEffect(() => {
-    const dv = deltas?.valuation ?? 0;
-    if (!dv || !event) return;
-    const key = `val-${event.id}`;
-    if (lastValNotifRef.current === key) return;
-    lastValNotifRef.current = key;
-    const fmtM = (n: number) =>
-      `${n < 0 ? "-" : "+"}$${Math.abs(n / 1_000_000).toFixed(1)}M`;
-    const why =
-      event.effects_summary?.find((e) => e.why)?.why ??
-      "the market did market things.";
-    safePush({
-      id: key,
-      kind: "stat_threshold",
-      severity: dv < 0 ? "warn" : "info",
-      source_label: "valuation · dashboard",
-      title: `valuation ${dv < 0 ? "▼" : "▲"} ${fmtM(dv)}`,
-      body: why,
-      ts: "now",
-      ttl_ms: 7000,
-      sound: dv < 0 ? "glass" : "cash",
-    });
-  }, [deltas, event, stats, safePush]);
-
   // periodic calendar invites (mock-only — atmospheric loop, backend doesn't emit these)
   useEffect(() => {
     if (getApiMode() !== "mock") return;
