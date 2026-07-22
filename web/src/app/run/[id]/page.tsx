@@ -381,6 +381,7 @@ export default function RunPage() {
             miniActionTitle={activeMini?.title ?? null}
             onReasoningDone={onReasoningDone}
             onCommit={onCommit}
+            onPredict={onPredict}
             replayMode={replayMode}
             originalPredictionId={originalPredictions[eventIdx] ?? null}
           />
@@ -423,6 +424,7 @@ export default function RunPage() {
               miniActionTitle={activeMini?.title ?? null}
               onReasoningDone={onReasoningDone}
               onCommit={onCommit}
+              onPredict={onPredict}
               replayMode={replayMode}
               originalPredictionId={originalPredictions[eventIdx] ?? null}
             />
