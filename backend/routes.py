@@ -1666,9 +1666,16 @@ async def _emit_endgame(state, sse):
     except Exception:  # pragma: no cover
         pass
     company = (state.bible or {}).get("company") or {}
+    try:
+        from corpus_loader import endgame_display  # type: ignore
+        _disp = endgame_display(endgame_id)
+    except Exception:  # pragma: no cover
+        _disp = {"title": endgame_id, "verdict": "", "category": ""}
     yield sse("endgame.reached", {
         "endgame_id": endgame_id,
-        "title": endgame_id,
+        "title": _disp["title"],
+        "verdict": _disp["verdict"],
+        "endgame_category": _disp["category"],
         "final_headline": (company.get("display_name", "") + " — closed.").strip(),
         "share_card_url": f"/run/{state.run_id}/card.png",
         "achievements_summary": list(state.achievements),
@@ -1726,11 +1733,15 @@ async def _emit_endgame(state, sse):
     import threading
     threading.Thread(target=producer, daemon=True).start()
 
+    partial: List[str] = []  # salvage buffer — a writer that dies mid-stream
+    # used to persist an EMPTY long-read (observed live: run ended FLED-003
+    # with post_mortem_md = "").
     while True:
         ev = await q.get()
         if ev is SENTINEL:
             break
         if ev.get("type") == "post_mortem.delta":
+            partial.append(ev.get("text", ""))
             yield sse("post_mortem.delta", {"text": ev.get("text", "")})
         elif ev.get("type") == "post_mortem.complete":
             # Persist the long-read so the post-mortem page can fetch the
@@ -1747,4 +1758,17 @@ async def _emit_endgame(state, sse):
                 "endgame_id": endgame_id,
             })
         elif ev.get("type") == "system.error":
+            # Keep whatever the writer managed to say before it died — a
+            # partial post-mortem beats a blank page.
+            salvaged = "".join(partial).strip()
+            if salvaged and not state.post_mortem_md:
+                state.post_mortem_md = (
+                    salvaged + "\n\n*(the post-mortem writer was disconnected"
+                    " here. the record ends mid-sentence, which is fitting.)*"
+                )
+                try:
+                    from state import persist_run as _persist3  # type: ignore
+                    _persist3(state.run_id)
+                except Exception:
+                    pass
             yield _system_error_sse(ev.get("message", "post-mortem failed"))

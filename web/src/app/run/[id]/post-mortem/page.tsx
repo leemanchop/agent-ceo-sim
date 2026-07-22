@@ -1,6 +1,11 @@
 import type { Metadata } from "next";
 import { PostMortemScreen } from "@/components/post-mortem/post-mortem-screen";
-import { MOCK_ENDGAME, type EndgameSnapshot } from "@/lib/mock-endgame";
+import {
+  MOCK_ENDGAME,
+  STAMP_BY_ARCHETYPE,
+  type EndgameArchetype,
+  type EndgameSnapshot,
+} from "@/lib/mock-endgame";
 
 const SHARE_DOMAIN = "https://30u30.fail";
 
@@ -56,6 +61,8 @@ async function loadEndgame(runId: string): Promise<EndgameSnapshot> {
       endgame?: {
         endgame_id?: string;
         title?: string;
+        verdict?: string;
+        endgame_category?: string;
         final_headline?: string;
         post_mortem_long_read?: string;
         tagline?: string;
@@ -88,10 +95,23 @@ async function loadEndgame(runId: string): Promise<EndgameSnapshot> {
       snap.stats && typeof snap.stats.valuation === "number"
         ? { ...MOCK_ENDGAME.final_stats, ...snap.stats }
         : null;
+    const endgameId =
+      snap.endgame?.endgame_id ?? snap.endgame_id ?? MOCK_ENDGAME.endgame_id;
+    // Archetype from the record id (END-FLED-003 → FLED) — drives the stamp
+    // fallback and the card accent. Never inherit the mock's PRISON.
+    const idFamily = (endgameId.split("-")[1] ?? "").toUpperCase();
+    const archetype = (
+      idFamily in STAMP_BY_ARCHETYPE ? idFamily : "GOTAWAY"
+    ) as EndgameArchetype;
     return {
       ...MOCK_ENDGAME,
-      endgame_id: snap.endgame?.endgame_id ?? snap.endgame_id ?? MOCK_ENDGAME.endgame_id,
+      endgame_id: endgameId,
+      archetype,
       title: snap.endgame?.title ?? MOCK_ENDGAME.title,
+      // Stamp: backend verdict (derived from the corpus record) beats the
+      // per-archetype default; the mock's "25 YEARS FEDERAL" never leaks
+      // onto a real run's card again.
+      stamp_text: snap.endgame?.verdict || STAMP_BY_ARCHETYPE[archetype],
       final_headline: snap.endgame?.final_headline ?? MOCK_ENDGAME.final_headline,
       post_mortem_long_read:
         snap.endgame?.post_mortem_long_read ?? MOCK_ENDGAME.post_mortem_long_read,
@@ -101,6 +121,11 @@ async function loadEndgame(runId: string): Promise<EndgameSnapshot> {
         snap.endgame?.one_liner ?? bibleCo?.one_liner ?? MOCK_ENDGAME.company_one_liner,
       founder_name: founder,
       founder_initials: initials,
+      // The Vellum "Tiger Global term sheet" moment is demo fiction — hide
+      // the section on real runs until the backend nominates a real pivot.
+      pivotal_event_title: "",
+      pivotal_event_outcome: "",
+      ended_at: new Date().toLocaleDateString("en-CA"),
       ...(realStats
         ? { final_stats: realStats, peak_stats: realStats }
         : {}),

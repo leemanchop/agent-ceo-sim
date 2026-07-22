@@ -199,6 +199,10 @@ export const FindingUnsealedSchema = z.object({
 export const EndgameReachedSchema = z.object({
   endgame_id: z.string(),
   title: z.string(),
+  // Trading-card stamp text derived from the corpus record ("FLED —
+  // SINGAPORE") — without it the card falls back to per-archetype defaults.
+  verdict: z.string().optional(),
+  endgame_category: z.string().optional(),
   final_headline: z.string().optional(),
   post_mortem_long_read: z.string().optional(),
   share_card_url: z.string().optional(),

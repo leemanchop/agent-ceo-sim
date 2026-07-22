@@ -178,6 +178,8 @@ export type SsePayloadByKind = {
   "endgame.reached": {
     endgame_id: string;
     title: string;
+    verdict?: string;
+    endgame_category?: string;
     final_headline?: string;
     post_mortem_long_read?: string;
     share_card_url?: string;

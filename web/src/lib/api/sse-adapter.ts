@@ -288,6 +288,7 @@ export type RunStreamHandlers = {
   onEndgame: (endgame: {
     id: string;
     title: string;
+    verdict?: string;
     share_card_url: string;
   }) => void;
   onAchievement?: (achievement: Achievement) => void;
@@ -446,6 +447,7 @@ export function attachStream(
     handlers.onEndgame({
       id: p.endgame_id,
       title: p.title,
+      verdict: p.verdict,
       share_card_url: p.share_card_url ?? "",
     })
   );

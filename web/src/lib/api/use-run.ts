@@ -206,7 +206,7 @@ export type UseRunResult = {
   paused: boolean;
   runEnded: boolean;
   isLastEvent: boolean;
-  endgame: { id: string; title: string; share_card_url: string } | null;
+  endgame: { id: string; title: string; verdict?: string; share_card_url: string } | null;
 
   // setters / actions
   predict: (choiceId: string) => void;
@@ -333,7 +333,7 @@ export function useRun({
   const [speed, setSpeedState] = useState<1 | 2 | 4>(replayMode ? 4 : 1);
   const [runEnded, setRunEnded] = useState(false);
   const [endgame, setEndgame] = useState<
-    { id: string; title: string; share_card_url: string } | null
+    { id: string; title: string; verdict?: string; share_card_url: string } | null
   >(null);
 
   // For live mode: the active event is built up token by token.
@@ -922,6 +922,7 @@ export function useRun({
                 run_id: backendRunIdRef.current,
                 endgame_id: eg.id,
                 title: eg.title,
+                verdict: eg.verdict,
                 share_card_url: eg.share_card_url,
                 bible: liveBibleRef.current,
                 stats: undefined as unknown,  // filled below if available
