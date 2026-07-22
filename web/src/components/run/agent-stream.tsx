@@ -34,6 +34,7 @@ export function AgentStream({
   miniActionTitle,
   onReasoningDone,
   onCommit,
+  onPredict,
   replayMode = false,
   originalPredictionId = null,
 }: {
@@ -55,6 +56,9 @@ export function AgentStream({
   miniActionTitle?: string | null;
   onReasoningDone: () => void;
   onCommit: (id: string) => void;
+  /** Spectate prediction — the big choice buttons double as predict targets
+   *  (players kept missing the tiny chips in the bottom controls bar). */
+  onPredict?: (id: string) => void;
   replayMode?: boolean;
   originalPredictionId?: string | null;
 }) {
@@ -160,6 +164,13 @@ export function AgentStream({
 
   // CEO can pick any choice during awaiting
   const ceoCanPick = mode === "ceo" && phase === "awaiting";
+  // Spectate: the big choice buttons commit the prediction directly — same
+  // window as the bottom-bar chips (players kept missing those).
+  const canPredict =
+    mode === "spectate" &&
+    !!onPredict &&
+    (phase === "deliberating" || phase === "awaiting") &&
+    !predicted;
 
   // auto-paused stamp: severity L or XL
   const showAutoPaused =
@@ -433,8 +444,20 @@ export function AgentStream({
                 className="px-4 py-3"
                 style={{ borderTop: "1px dashed var(--ink)" }}
               >
-                <div className="tag" style={{ marginBottom: 6 }}>
-                  CHOICES · {mode === "spectate" ? "agent will pick" : "you commit"}
+                <div
+                  className="tag"
+                  style={{
+                    marginBottom: 6,
+                    ...(canPredict
+                      ? { color: "var(--alarm)", borderColor: "var(--alarm)" }
+                      : {}),
+                  }}
+                >
+                  {canPredict
+                    ? "CHOICES · CLICK YOUR PREDICTION →"
+                    : `CHOICES · ${
+                        mode === "spectate" ? "agent will pick" : "you commit"
+                      }`}
                 </div>
                 <div className="flex flex-col" style={{ gap: 6 }}>
                   {event.choices.map((c) => {
@@ -442,7 +465,7 @@ export function AgentStream({
                       revealCommitted && committedChoice?.id === c.id;
                     const isFaded = revealCommitted && !isCommitted;
                     const isPredicted = mode === "spectate" && predicted === c.id;
-                    const isClickable = ceoCanPick;
+                    const isClickable = ceoCanPick || canPredict;
                     const wrongPrediction =
                       mode === "spectate" &&
                       revealCommitted &&
@@ -501,10 +524,14 @@ export function AgentStream({
                         <button
                           type="button"
                           disabled={!isClickable}
-                          onClick={() => isClickable && onCommit(c.id)}
+                          onClick={() => {
+                            if (!isClickable) return;
+                            if (ceoCanPick) onCommit(c.id);
+                            else onPredict?.(c.id);
+                          }}
                           className={cn(
                             "w-full text-left flex items-center gap-2 px-3 py-2 transition-colors font-mono",
-                            isClickable && "cursor-pointer"
+                            isClickable && "cursor-pointer hover:bg-paper2"
                           )}
                           style={{
                             border: isCommitted
