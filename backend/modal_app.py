@@ -126,21 +126,32 @@ def _build_fastapi():
         return {"ok": True, "achievement_engine": ach_status,
                 "scripted_engine": scripted}
 
-    # TODO: gate behind admin auth before public launch.
+    from fastapi import Request
+
+    def _admin(request: Request) -> None:
+        expected = os.environ.get("ACES_ADMIN_TOKEN", "")
+        if not expected:
+            return
+        supplied = (request.query_params.get("token")
+                    or request.headers.get("x-admin-token") or "")
+        if supplied != expected:
+            raise HTTPException(403, "admin token required")
+
     @fapi.get("/usage")
-    def usage_all():
+    def usage_all(request: Request):
+        _admin(request)
         return usage_tracker.summarize(None)
 
-    # TODO: gate behind admin auth before public launch.
     @fapi.get("/usage/{run_id}")
-    def usage_one(run_id: str):
+    def usage_one(run_id: str, request: Request):
+        _admin(request)
         if not run_id:
             raise HTTPException(400, "run_id required")
         return usage_tracker.summarize(run_id)
 
-    # TODO: gate behind admin auth before public launch.
     @fapi.get("/rate_limits")
-    def rate_limits():
+    def rate_limits(request: Request):
+        _admin(request)
         return usage_tracker.current_rate_limits()
 
     # Mount per-run SSE + REST routes (POST /run/create, GET /run/{id}/stream, …).
@@ -150,7 +161,11 @@ def _build_fastapi():
 
 
 @app.function(
-    secrets=[modal.Secret.from_name("anthropic")],
+    secrets=[
+        modal.Secret.from_name("anthropic"),
+        # Optional admin token (ACES_ADMIN_TOKEN) gating /usage + /admin/*.
+        modal.Secret.from_name("admin"),
+    ],
     timeout=60 * 60,  # 1 hour for long runs
     volumes={"/data": runs_volume},  # persistent run-state SQLite
     # Pin to a single container so the in-memory _RUNS cache + decision
