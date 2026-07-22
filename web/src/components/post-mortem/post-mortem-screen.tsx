@@ -21,21 +21,16 @@ function slugify(s: string): string {
     .slice(0, 48);
 }
 
-/** dynamic, build-safe import — bypasses static analysis so the page
- *  still builds even when `html-to-image` is not installed yet. */
+/** html-to-image is a real dependency now — a plain dynamic import lets
+ *  webpack bundle it (the old Function-ctor trick evaluated in the BROWSER,
+ *  where bare specifiers can never resolve — the "install html-to-image"
+ *  error even though the package was installed). */
 async function loadHtmlToImage(): Promise<
   | { toPng: (n: HTMLElement, opts?: Record<string, unknown>) => Promise<string> }
   | null
 > {
   try {
-    // Function ctor keeps Next/Webpack from trying to resolve the module at build.
-    const dyn = new Function("m", "return import(m)") as (
-      m: string,
-    ) => Promise<unknown>;
-    const mod = (await dyn("html-to-image")) as {
-      toPng?: (n: HTMLElement, opts?: Record<string, unknown>) => Promise<string>;
-    };
-    if (typeof mod?.toPng !== "function") return null;
+    const mod = await import("html-to-image");
     return { toPng: mod.toPng };
   } catch {
     return null;
