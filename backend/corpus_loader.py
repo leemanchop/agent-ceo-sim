@@ -138,7 +138,12 @@ def _split_records(text: str, source_file: str) -> List[CorpusRecord]:
         kind = rid.split("-", 1)[0]
         parts = rid.split("-")
         category = parts[1] if len(parts) > 1 else ""
-        title = m.group("title").strip().strip('"').strip("'")
+        # Strip only MATCHED outer quote pairs — blanket .strip("'") ate the
+        # closing quote of titles like `"Cayman — 'For the Lifestyle'"` and
+        # the unbalanced apostrophe reached the card.
+        title = m.group("title").strip()
+        while len(title) >= 2 and title[0] == title[-1] and title[0] in "\"'":
+            title = title[1:-1].strip()
 
         rec = CorpusRecord(
             record_id=rid,

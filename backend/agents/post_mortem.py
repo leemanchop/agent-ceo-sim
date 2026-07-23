@@ -58,11 +58,23 @@ VOICE ANCHORS (in order of weight):
      by Bloomberg" are welcome, attached to FICTIONAL sources only.
   3. Bloomberg Businessweek house style for the lede and the kicker.
 
-STRUCTURAL HINT: the endgame record's own description tells you what shape
-this piece should take. If it says "Bloomberg Businessweek profile that is
-60% sympathetic against its will," that's the assignment. If it says "New
-York Times two-founders feature with split-column layout," lean into it.
-Honour the hint; don't invent a different shape.
+STRUCTURAL HINT: the endgame record's own description suggests a REGISTER
+and SHAPE ("Bloomberg Businessweek profile that is 60% sympathetic against
+its will", "NYT two-founders feature"). Honour the register.
+
+SUBJECT LOCK (outranks the structural hint — a reader paid for THIS run):
+  - The piece is ALWAYS about the run's company and its founder, BY NAME,
+    exactly as the COMPANY BIBLE block gives them. Never rename the
+    company, never reassign its industry or product, never invent a
+    different founder. If the bible says a factory-orchestration AI
+    company, it is not a beverage brand, whatever its name suggests.
+  - The company is the protagonist and through-line of EVERY section. If
+    the endgame hint proposes a wide-angle frame — an industry trend
+    piece, a profile of the enabler firm, "the CEO as one bullet on a
+    list of nineteen" — INVERT it: tell it entirely through this
+    company's arc, and give the wide frame two sentences of texture, max.
+  - The decision history is your material. Reference at least three
+    actual beats from the run by their specifics.
 
 FORMAT:
   - Markdown.
@@ -135,10 +147,28 @@ def _summarise_run(run_state: Any, max_turns: int = 12) -> str:
     turns_block = "\n".join(turn_lines) + elision
 
     parts = []
-    parts.append("## COMPANY BIBLE\n")
+    parts.append("## COMPANY BIBLE (canon — names/industry are law)\n")
     if isinstance(bible, dict):
-        for k in ("name", "tagline", "industry", "stage", "founder_voice"):
-            v = bible.get(k)
+        # Real bible shape nests identity under company/founders. The old
+        # flat keys (name/tagline/...) never existed at the top level, so
+        # this block rendered EMPTY on every run — the writer invented
+        # company identities from vibes ("a beverage startup called NOLO").
+        co = bible.get("company") if isinstance(bible.get("company"), dict) \
+            else {}
+        founders = bible.get("founders") or []
+        f0 = founders[0] if founders and isinstance(founders[0], dict) else {}
+        pairs = [
+            ("company", co.get("display_name") or co.get("name")
+             or bible.get("name")),
+            ("one_liner", co.get("one_liner") or bible.get("tagline")),
+            ("industry", co.get("industry") or bible.get("industry")),
+            ("stage", co.get("funding_stage") or bible.get("stage")),
+            ("product", (co.get("product") or {}).get("category_noun")
+             if isinstance(co.get("product"), dict) else None),
+            ("founder", f0.get("name")),
+            ("founder_vibe", f0.get("persona_vibe")),
+        ]
+        for k, v in pairs:
             if v:
                 parts.append(f"- {k}: {v}")
     parts.append("")
@@ -168,13 +198,14 @@ def _user_prompt(
     return f"""\
 The run has ended. Endgame: **{endgame_id}**.
 
-# ENDGAME RECORD (structural hint lives here — read for the long-read shape)
-
-{endgame_body}
-
-# RUN DIGEST
+# RUN DIGEST (this run is the SUBJECT of the piece)
 
 {digest}
+
+# ENDGAME RECORD (register + shape inspiration ONLY — the subject stays the
+run's company above; invert any wide-angle frame per the SUBJECT LOCK)
+
+{endgame_body}
 
 # SHARE CARD HOOKS (these will appear on the share card; the post-mortem
 should mention or set up at least two of them naturally)
@@ -183,8 +214,8 @@ should mention or set up at least two of them naturally)
 
 # YOUR TASK
 
-Write the 600-1000 word post-mortem long read in the voice and shape
-prescribed by the endgame record's own description, adapted into the
+Write the 600-1000 word post-mortem long read about THIS company and THIS
+founder, in the register suggested by the endgame record, adapted into the
 Matt-Levine-tracking-this-for-months register. Markdown only. No preamble.
 Start with `# `.
 """
