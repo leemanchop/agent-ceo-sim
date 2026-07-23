@@ -8,6 +8,7 @@ import type {
   Phase,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { makeFlavorDeck } from "@/lib/research-flavor";
 import { CheckCircle2, X } from "lucide-react";
 
 const AMBIENT_THOUGHTS = [
@@ -64,6 +65,44 @@ export function AgentStream({
 }) {
   const [streamed, setStreamed] = useState("");
   const [ambientIdx, setAmbientIdx] = useState(0);
+
+  // Researcher-log theater: the researcher is one long LLM call and can't
+  // narrate itself — jittered flavor lines keep the log alive between real
+  // progress steps (the research wait is the funnel's biggest drop-off).
+  const [flavorLog, setFlavorLog] = useState<{ step: string; ts: number }[]>([]);
+  const flavorDeck = useRef<((company: string) => string) | null>(null);
+  const companyRef = useRef<string>("");
+  companyRef.current = bible.display_name || bible.name || "";
+  useEffect(() => {
+    if (phase !== "researching") {
+      setFlavorLog([]);
+      return;
+    }
+    if (!flavorDeck.current) flavorDeck.current = makeFlavorDeck();
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = () => {
+      if (!alive) return;
+      setFlavorLog((prev) =>
+        [...prev, { step: flavorDeck.current!(companyRef.current), ts: Date.now() }]
+          .slice(-60)
+      );
+      timer = setTimeout(tick, 2200 + Math.random() * 2200);
+    };
+    tick(); // first line immediately — the log is never dead
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [phase]);
+
+  // auto-follow the live log as lines append
+  const liveLogRef = useRef<HTMLDivElement | null>(null);
+  const liveLogLen = flavorLog.length + (researchLog?.length ?? 0);
+  useEffect(() => {
+    const el = liveLogRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [liveLogLen]);
 
   // reset stream when event/phase shifts back to non-streaming
   useEffect(() => {
@@ -255,80 +294,93 @@ export function AgentStream({
               style={{ fontSize: 13, color: "var(--soft)", lineHeight: 1.5 }}
             >
               {templateId
-                ? "loading the hand-authored record. about a minute."
-                : "landing page, founder posts, recent press. usually 2–4 minutes. don't close the tab."}
+                ? "about a minute."
+                : "usually 2–4 minutes. don't close the tab."}
             </div>
-            {/* Live log — visible from second zero so the wait never looks
-                dead. Researcher steps AND showrunner episode progress both
-                land here (templates skip research but still script). */}
-            {(
-              <div
-                className="font-mono mt-2 w-full animate-event-in"
-                style={{
-                  border: "1.4px solid var(--ink)",
-                  background: "var(--paper-2)",
-                  padding: "10px 12px",
-                  maxHeight: 260,
-                  overflowY: "auto",
-                  fontSize: 12,
-                  color: "var(--ink-2)",
-                  lineHeight: 1.5,
-                }}
-              >
+            {/* Live log — real researcher/showrunner steps interleaved with
+                flavor lines on one stream. The seam is invisible on purpose:
+                the log is theater, the [x/y] steps are true. */}
+            {(() => {
+              const merged = [
+                ...(researchLog ?? []),
+                ...flavorLog,
+              ].sort((a, b) => a.ts - b.ts).slice(-60);
+              return (
                 <div
-                  className="font-mono uppercase mb-2"
+                  ref={liveLogRef}
+                  className="font-mono mt-2 w-full animate-event-in"
                   style={{
-                    fontSize: 9,
-                    color: "var(--alarm)",
-                    fontWeight: 700,
-                    letterSpacing: "0.12em",
+                    border: "1.4px solid var(--ink)",
+                    background: "var(--paper-2)",
+                    padding: "10px 12px",
+                    maxHeight: 260,
+                    overflowY: "auto",
+                    fontSize: 12,
+                    color: "var(--ink-2)",
+                    lineHeight: 1.5,
                   }}
                 >
-                  ▌ LIVE LOG
-                </div>
-                {(!researchLog || researchLog.length === 0) && (
                   <div
+                    className="font-mono uppercase mb-2"
                     style={{
-                      borderLeft: "2px solid var(--alarm)",
-                      paddingLeft: 8,
-                      marginBottom: 3,
+                      fontSize: 9,
+                      color: "var(--alarm)",
+                      fontWeight: 700,
+                      letterSpacing: "0.12em",
                     }}
                   >
-                    <span className="text-soft">system ›</span> connecting to
-                    the researcher…
-                    <span className="animate-blink ml-1">▌</span>
+                    ▌ LIVE LOG
                   </div>
-                )}
-                {(researchLog ?? []).map((entry, i) => {
-                  const isLast = i === (researchLog ?? []).length - 1;
-                  return (
+                  {merged.length === 0 && (
                     <div
-                      key={`${entry.ts}-${i}`}
                       style={{
-                        opacity: isLast ? 1 : 0.62,
-                        borderLeft: isLast
-                          ? "2px solid var(--alarm)"
-                          : "2px solid var(--soft)",
+                        borderLeft: "2px solid var(--alarm)",
                         paddingLeft: 8,
                         marginBottom: 3,
-                        wordBreak: "break-word",
                       }}
                     >
-                      <span className="text-soft">researcher ›</span>{" "}
-                      {entry.step}
-                      {typeof entry.current === "number" &&
-                        typeof entry.total === "number" && (
-                          <span className="text-soft">
-                            {" "}
-                            [{entry.current}/{entry.total}]
-                          </span>
-                        )}
-                      {isLast && <span className="animate-blink ml-1">▌</span>}
+                      <span className="text-soft">system ›</span> connecting to
+                      the researcher…
+                      <span className="animate-blink ml-1">▌</span>
                     </div>
-                  );
-                })}
-              </div>
-            )}
+                  )}
+                  {merged.map((entry, i) => {
+                    const isLast = i === merged.length - 1;
+                    const withCounter = entry as {
+                      step: string;
+                      ts: number;
+                      current?: number;
+                      total?: number;
+                    };
+                    return (
+                      <div
+                        key={`${entry.ts}-${i}`}
+                        style={{
+                          opacity: isLast ? 1 : 0.62,
+                          borderLeft: isLast
+                            ? "2px solid var(--alarm)"
+                            : "2px solid var(--soft)",
+                          paddingLeft: 8,
+                          marginBottom: 3,
+                          wordBreak: "break-word",
+                        }}
+                      >
+                        <span className="text-soft">researcher ›</span>{" "}
+                        {entry.step}
+                        {typeof withCounter.current === "number" &&
+                          typeof withCounter.total === "number" && (
+                            <span className="text-soft">
+                              {" "}
+                              [{withCounter.current}/{withCounter.total}]
+                            </span>
+                          )}
+                        {isLast && <span className="animate-blink ml-1">▌</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
             <div
               className="font-mono mt-3"
               style={{ fontSize: 10, color: "var(--soft)" }}

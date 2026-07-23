@@ -889,6 +889,17 @@ SAMPLE HEADLINES (verbatim register targets):
 - "Closed $14.2M. Down round implied at $312M post."
 - "At 11:43 AM Pacific, @SoftwareEng_Memes posts a screenshot of [COMPANY]'s public GitHub showing OPENAI_API_KEY committed in plaintext."
 
+BREVITY IS THE FORMAT (hard limits — the UI is a terminal card, not a
+magazine; players skim):
+- Large-beat `body`: MAX 2 sentences, MAX 40 words. One concrete detail
+  beats three adjectives. If a sentence doesn't add a new fact, cut it.
+- `title`: MAX 8 words.
+- Mini `body` and `outcome`: ONE line each, MAX 18 words.
+- Choice `label`s: MAX 8 words, verb-first.
+- `stat_rationale`: one clause, MAX 14 words.
+Long prose belongs ONLY in the post-mortem. On-screen beats are wire copy:
+"X happened. Y reacted. Z is now true." Nothing more.
+
 WORLD CANON — THE PRESUMPTION OF OPERATING REALITY (load-bearing; violating
 this breaks the entire game premise):
 
@@ -987,7 +998,7 @@ SHOWRUNNER_TOOL: Dict[str, Any] = {
                     "properties": {
                         "ref": {"type": "string", "description": "Echo the beat's ref exactly (e.g. t3, mini-2-1)."},
                         "title": {"type": "string"},
-                        "body": {"type": "string", "description": "1-3 sentence Showrunner-voice scene, adapted to THIS company, consistent with the beat's stats_after."},
+                        "body": {"type": "string", "description": "Showrunner-voice scene — HARD MAX 2 sentences / 40 words. Adapted to THIS company, consistent with the beat's stats_after. Wire copy, not a magazine."},
                         "choices": {
                             "type": "array",
                             "items": {
@@ -1213,7 +1224,11 @@ def _apply_row(beat: Dict[str, Any], row: Dict[str, Any]) -> None:
     if title:
         beat["title"] = title
     if body:
-        beat["body"] = body
+        # Brevity is the format (owner call): the prompt caps bodies at two
+        # sentences; models drift, so overruns are trimmed at the sentence
+        # boundary. Minis stay one line.
+        beat["body"] = _first_sentences(
+            body, 1 if beat.get("kind") == "mini" else 2) or body
     rationale = _s(row.get("stat_rationale"))
     if rationale:
         beat["stat_rationale"] = rationale
