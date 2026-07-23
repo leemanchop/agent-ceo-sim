@@ -233,6 +233,47 @@ def install_routes(api: Any) -> None:  # api: FastAPI
                      "attachment; filename=30u30-submissions.csv"},
         )
 
+    @api.get("/admin/runs")
+    async def admin_runs(format: str = "json", limit: int = 2000,
+                         token: str = ""):
+        _require_admin(token)
+        """Owner analytics export: one row per run — status (completed vs
+        abandoned mid-run), progress, ending, final stats, prediction score.
+        ?format=csv downloads a spreadsheet-ready file."""
+        rows = run_store.list_runs_admin(limit=limit)
+        # Human ending title alongside the record id ("Six Months —
+        # Cooperator Plea" reads better in a spreadsheet than END-PRISON-006).
+        try:
+            from corpus_loader import endgame_display  # type: ignore
+            for r in rows:
+                r["endgame"] = (endgame_display(r["endgame_id"])["title"]
+                                if r.get("endgame_id") else "")
+        except Exception:
+            for r in rows:
+                r.setdefault("endgame", "")
+        if format != "csv":
+            return {"count": len(rows), "runs": rows}
+        import csv
+        import io
+        buf = io.StringIO()
+        cols = ["started_at", "ended_at", "status", "company_name",
+                "template_id", "industry", "founder_vibe", "length_mode",
+                "craziness", "turns_elapsed", "endgame_id", "endgame",
+                "final_valuation", "final_cash", "final_fraud_score",
+                "final_fbi_awareness", "final_day", "predictions_correct",
+                "predictions_total", "mode", "run_id", "updated_at"]
+        w = csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore")
+        w.writeheader()
+        for r in rows:
+            w.writerow(r)
+        from fastapi.responses import Response
+        return Response(
+            content=buf.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition":
+                     "attachment; filename=30u30-runs.csv"},
+        )
+
     # TODO: gate behind admin auth before public launch (same as /usage).
     @api.get("/run/{run_id}/script")
     async def run_script_dump(run_id: str, token: str = ""):

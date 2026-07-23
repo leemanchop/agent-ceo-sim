@@ -556,6 +556,50 @@ def list_runs(
     return [dict(r) for r in rows]
 
 
+def list_runs_admin(limit: int = 2000) -> List[Dict[str, Any]]:
+    """Owner analytics export: every run's flat columns plus final stats and
+    prediction score parsed out of the state blob. Newest first. Powers
+    /admin/runs (who finished, who bailed, what ending they got)."""
+    with _DB_LOCK:
+        conn = _connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT run_id, status, mode, template_id, company_name,
+                       industry, founder_vibe, length_mode, craziness,
+                       started_at, ended_at, turns_elapsed, endgame_id,
+                       updated_at, state_blob_json
+                FROM runs ORDER BY started_at DESC LIMIT ?
+                """,
+                (int(limit),),
+            ).fetchall()
+        finally:
+            conn.close()
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        blob_raw = d.pop("state_blob_json", None)
+        stats: Dict[str, Any] = {}
+        preds: Any = None
+        try:
+            blob = json.loads(blob_raw or "{}")
+            stats = blob.get("stats") or {}
+            preds = blob.get("predictions")
+        except Exception:
+            pass  # unparseable blob — flat columns still tell the story
+        d["final_valuation"] = stats.get("valuation")
+        d["final_cash"] = stats.get("cash")
+        d["final_fraud_score"] = stats.get("fraud_score")
+        d["final_fbi_awareness"] = stats.get("fbi_awareness")
+        d["final_day"] = stats.get("day")
+        d["predictions_correct"] = (preds or {}).get("correct") \
+            if isinstance(preds, dict) else None
+        d["predictions_total"] = (preds or {}).get("total") \
+            if isinstance(preds, dict) else None
+        out.append(d)
+    return out
+
+
 def append_decision(
     run_id: str,
     turn: int,
